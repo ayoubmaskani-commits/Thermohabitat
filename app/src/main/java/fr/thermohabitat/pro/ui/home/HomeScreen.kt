@@ -229,7 +229,7 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
             Triple("Pièces", "${p.project.building.rooms.size}", Icons.Filled.House),
             Triple("Radiateurs validés", "${r.validatedRadiatorCount} / ${r.radiatorCount}", Icons.Filled.ViewColumn),
             Triple("Besoins couverts à ${coverage.supplyC.toInt()} °C", Fmt.pct(coverage.coveredFraction), Icons.Filled.CheckCircle),
-            Triple("Départ nécessaire", r.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "> 90 °C ou non couvert", Icons.Filled.Thermostat),
+            Triple("Départ nécessaire", Fmt.supply(r.supply), Icons.Filled.Thermostat),
             Triple("Compatibilité PAC", r.compatibility.label, Icons.Filled.Science),
         )
         cards.chunked(2).forEach { row ->

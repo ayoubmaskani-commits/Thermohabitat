@@ -135,7 +135,7 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
             SectionCard("Besoins et émetteurs", icon = Icons.Filled.LocalFireDepartment) {
                 ValueRow("Charge de conception à θe", Fmt.kw(hl.totalW), emphasize = true)
                 ValueRow("Coefficient H", "${Fmt.num(hl.totalHWk, 1)} W/K")
-                ValueRow("Départ nécessaire à θe", d.analyzed.result.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "Non atteignable")
+                ValueRow("Départ nécessaire à θe", Fmt.supply(d.analyzed.result.supply))
                 d.analyzed.result.regimeCoverages.filter { it.supplyC in listOf(45.0, 50.0, 55.0, 60.0) }.forEach { c ->
                     ValueRow("Couverture à ${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", "${Fmt.pct(c.coveredFraction)} · ${c.insufficientRooms.size} pièce(s) insuffisante(s)")
                 }
@@ -151,8 +151,11 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                     NumberField("Départ au pied", curve.footSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(footSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 60.0)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Départ minimal", curve.minSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(minSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false)
-                    NumberField("Départ maximal", curve.maxSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(maxSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false)
+                    NumberField("Départ minimal", curve.minSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(minSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
+                    NumberField("Départ maximal", curve.maxSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(maxSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
+                }
+                if (curve.minSupplyC > curve.maxSupplyC) {
+                    InfoBanner("Le départ minimal dépasse le départ maximal : la loi d'eau est bornée entre ces deux valeurs dans l'ordre croissant.", kind = BannerKind.WARNING)
                 }
                 ValueRow("Pente", Fmt.num(curve.slope, 2))
                 OutlinedButton(onClick = { vm.fitCurveToNeed() }) { Text("Ajuster la loi d'eau sur le besoin des radiateurs") }
@@ -202,6 +205,10 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                     else -> Fmt.temp(bv.bivalentTempC)
                 }, emphasize = true)
                 bv.backupAtDesignKw?.takeIf { it > 0 }?.let { ValueRow("Appoint nécessaire à θe", "${Fmt.num(it, 1)} kW") }
+                if (bv.capacityExtrapolated) {
+                    InfoBanner("θe est hors de la plage des données constructeur : la puissance à θe est transposée depuis le point le plus froid " +
+                        "(−2,5 %/K, −0,5 %/K d'eau). Saisissez le point de la fiche à cette température pour la confirmer.", kind = BannerKind.WARNING)
+                }
                 val withCap = bv.points.filter { it.capacityKw != null }
                 if (withCap.isNotEmpty()) {
                     LineChart(
@@ -214,10 +221,13 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                 }
                 HorizontalDivider()
                 ValueRow("SCOP estimé (${d.seasonal.climateLabel})", Fmt.num(d.seasonal.scop, 2), emphasize = true)
-                ValueRow("Part d'appoint électrique", Fmt.pct(d.seasonal.backupShare))
+                ValueRow("Part d'appoint électrique", if (d.seasonal.capacityKnown) Fmt.pct(d.seasonal.backupShare) else "Non évaluée (puissance PAC inconnue)")
                 Text(
-                    if (d.seasonal.generic) "SCOP issu du modèle générique : ordre de grandeur à confirmer avec les données constructeur."
-                    else "SCOP calculé à partir des données constructeur saisies et de la loi d'eau.",
+                    when {
+                        d.seasonal.generic -> "SCOP issu du modèle générique : ordre de grandeur à confirmer avec les données constructeur."
+                        d.seasonal.extrapolated -> "SCOP calculé à partir des données constructeur et de la loi d'eau ; hors de leur plage, les valeurs sont transposées (Carnot) : à confirmer."
+                        else -> "SCOP calculé à partir des données constructeur saisies et de la loi d'eau."
+                    } + if (!d.seasonal.capacityKnown) " Sans puissance connue, la PAC est supposée couvrir toute la charge : SCOP optimiste." else "",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

@@ -13,6 +13,7 @@ import fr.thermohabitat.thermal.calc.HeatPumpModel
 import fr.thermohabitat.thermal.calc.HeatPumpPerformance
 import fr.thermohabitat.thermal.calc.HeatingCurve
 import fr.thermohabitat.thermal.calc.HydraulicMode
+import fr.thermohabitat.thermal.calc.RadiatorPower
 import fr.thermohabitat.thermal.calc.Regime
 import fr.thermohabitat.thermal.calc.SeasonalPerformance
 import fr.thermohabitat.thermal.calc.SupplyTemperatureSolver
@@ -20,6 +21,7 @@ import fr.thermohabitat.thermal.model.Building
 import fr.thermohabitat.thermal.scenario.Scenario
 import fr.thermohabitat.thermal.scenario.ScenarioEngine
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
 
 /** Paramètres de l'étude (régimes, hydraulique, PAC, énergie). */
 @Serializable
@@ -81,13 +83,19 @@ data class StudyResult(
 ) {
     val warnings: List<String> get() = heatLoss.warnings
     val radiatorCount: Int get() = building.radiators.size
-    val validatedRadiatorCount: Int get() = building.radiators.count { it.validated }
+    /** Radiateurs effectivement pris en compte : validés, avec une puissance établie. */
+    val validatedRadiatorCount: Int get() = building.radiators.count { RadiatorPower.countsInStudy(it) }
 }
 
 /** Point d'entrée du moteur : enchaîne déperditions, couverture, température de départ, PAC et énergie. */
 class StudyAnalyzer(private val calculator: HeatLossCalculator = HeatLossCalculator()) {
 
-    fun analyze(building: Building, settings: StudySettings, regimes: List<Regime> = Regime.STANDARD): StudyResult {
+    fun analyze(
+        building: Building,
+        settings: StudySettings,
+        regimes: List<Regime> = Regime.STANDARD,
+        calibrationReferenceNeedKwh: Double? = null,
+    ): StudyResult {
         val heatLoss = calculator.calculate(building)
         val study = CoverageAnalyzer.analyze(building, heatLoss, settings.studyRegime, settings.modeFor(settings.studyRegime))
         val byRegime = regimes.map { r -> CoverageAnalyzer.analyze(building, heatLoss, r, settings.modeFor(r)) }
@@ -104,21 +112,67 @@ class StudyAnalyzer(private val calculator: HeatLossCalculator = HeatLossCalcula
             )
         } else null
 
+        val dd = degreeDaysFor(building, heatLoss)
         val energy = EnergyEstimator.estimate(
             heatLossCoefficientWk = heatLoss.totalHWk,
-            degreeDays = building.climate.degreeDays,
-            degreeDaysBase = building.climate.degreeDaysBase,
+            degreeDays = dd.degreeDays,
+            degreeDaysBase = dd.base,
             settings = settings.energy,
             heatPumpScop = seasonal?.scop,
-        )
+            calibrationReferenceNeedKwh = calibrationReferenceNeedKwh,
+        ).let { e -> if (dd.note == null) e else e.copy(assumptions = listOf(dd.note) + e.assumptions) }
         return StudyResult(building, heatLoss, study, byRegime, supply, supplyCons, compat, seasonal, energy)
     }
 
     /** Analyse d'un scénario d'amélioration appliqué au bâtiment. */
     fun analyzeScenario(building: Building, settings: StudySettings, scenario: Scenario): StudyResult {
         val modified = ScenarioEngine.apply(building, scenario.modifications)
-        val s = scenario.regime?.let { settings.copy(studyRegime = it) } ?: settings
-        return analyze(modified, s)
+        val s = scenario.regime?.let { r ->
+            val c = settings.heatingCurve
+            settings.copy(
+                studyRegime = r,
+                // Le régime du scénario fixe aussi le point de base de la loi d'eau de la PAC (SCOP, coût PAC).
+                heatingCurve = if (r == settings.studyRegime) c else c.copy(
+                    designSupplyC = r.supplyC,
+                    designDeltaK = r.supplyC - r.returnC,
+                    maxSupplyC = maxOf(c.maxSupplyC, r.supplyC),
+                ),
+            )
+        } ?: settings
+        // Calage sur la consommation constatée : la référence est le besoin modélisé de l'état actuel.
+        val referenceNeed = settings.energy.currentAnnualConsumption?.takeIf { it > 0 }?.let {
+            val hl = calculator.calculate(building)
+            EnergyEstimator.annualNeedKwh(hl.totalHWk, degreeDaysFor(building, hl).degreeDays, settings.energy.intermittenceFactor)
+        }
+        return analyze(modified, s, calibrationReferenceNeedKwh = referenceNeed)
+    }
+
+    private data class DegreeDays(val degreeDays: Double, val base: Double, val note: String?)
+
+    /**
+     * DJU corrigés pour la consigne moyenne (pondérée par le H de chaque pièce) : les DJU climatiques en
+     * base θb correspondent conventionnellement à une consigne θb + 2 K (apports gratuits) ; chaque kelvin
+     * d'écart ajoute ou retire environ un DJU par jour de la saison de chauffage.
+     */
+    private fun degreeDaysFor(building: Building, heatLoss: BuildingHeatLoss): DegreeDays {
+        val climate = building.climate
+        val weights = heatLoss.rooms.map { it.setpointC to (it.envelopeHWk + it.ventilationHWk) }
+        val totalWeight = weights.sumOf { it.second }
+        val meanSetpoint = if (totalWeight > 0) weights.sumOf { it.first * it.second } / totalWeight
+            else climate.degreeDaysBase + FREE_GAINS_K
+        val delta = meanSetpoint - (climate.degreeDaysBase + FREE_GAINS_K)
+        if (abs(delta) < 0.05) return DegreeDays(climate.degreeDays, climate.degreeDaysBase, null)
+        val dju = (climate.degreeDays + delta * HEATING_DAYS).coerceAtLeast(0.0)
+        val note = "DJU corrigés pour la consigne moyenne ${meanSetpoint.fr(1)} °C : ${climate.degreeDays.fr(0)} " +
+            "${if (delta < 0) "−" else "+"} ${abs(delta).fr(1)} K × ${HEATING_DAYS.fr(0)} j = ${dju.fr(0)} DJU."
+        return DegreeDays(dju, climate.degreeDaysBase + delta, note)
+    }
+
+    private companion object {
+        /** Apports gratuits conventionnellement inclus dans l'écart consigne / base des DJU, K. */
+        const val FREE_GAINS_K = 2.0
+        /** Durée de la saison de chauffage du climat moyen EN 14825 (4 910 h), jours. */
+        val HEATING_DAYS = HeatPumpAnalysis.EN14825_AVERAGE_BINS.sumOf { it.second } / 24.0
     }
 }
 

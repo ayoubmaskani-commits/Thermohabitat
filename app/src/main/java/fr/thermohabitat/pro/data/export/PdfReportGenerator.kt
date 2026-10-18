@@ -18,6 +18,7 @@ import fr.thermohabitat.pro.data.repository.Project
 import fr.thermohabitat.thermal.ScenarioComparison
 import fr.thermohabitat.thermal.StudyAnalyzer
 import fr.thermohabitat.thermal.StudyResult
+import fr.thermohabitat.thermal.calc.BuildingSupplyRequirement
 import fr.thermohabitat.thermal.calc.CoverageStatus
 import fr.thermohabitat.thermal.calc.CoverageAnalyzer
 import fr.thermohabitat.thermal.calc.HeatPumpAnalysis
@@ -71,7 +72,7 @@ class PdfReportGenerator @Inject constructor(
         scenarios: List<Scenario>,
         sections: Set<ReportSection>,
     ): File = withContext(Dispatchers.Default) {
-        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val dir = File(context.cacheDir, fr.thermohabitat.pro.data.files.PhotoStorage.EXPORTS_DIR).apply { mkdirs() }
         val file = File(dir, "Rapport_${BackupManager.safeName(project.entity.name)}.pdf")
         val doc = PdfDocument()
         val w = Writer(doc, project.entity.name)
@@ -79,7 +80,7 @@ class PdfReportGenerator @Inject constructor(
             cover(w, project, result)
             if (ReportSection.BUILDING in sections) building(w, project, result)
             if (ReportSection.ROOMS in sections) rooms(w, result)
-            if (ReportSection.ENVELOPE in sections) envelope(w, project)
+            if (ReportSection.ENVELOPE in sections) envelope(w, project, result)
             if (ReportSection.HEAT_LOSS in sections) heatLoss(w, result)
             if (ReportSection.RADIATORS in sections) radiators(w, project, result)
             if (ReportSection.COMPARISON in sections) comparison(w, result)
@@ -111,7 +112,7 @@ class PdfReportGenerator @Inject constructor(
             "Coefficient de déperdition H" to "${n(r.heatLoss.totalHWk, 1)} W/K",
             "Radiateurs validés" to "${r.validatedRadiatorCount} / ${r.radiatorCount}",
             "Besoins couverts à ${r.studyCoverage.supplyC.toInt()} °C" to pct(r.studyCoverage.coveredFraction),
-            "Température de départ nécessaire" to (r.supply.requiredSupplyC?.let { "${n(it, 1)} °C" } ?: "non atteignable sous 90 °C"),
+            "Température de départ nécessaire" to supplyText(r.supply),
             "Compatibilité PAC estimée" to r.compatibility.label,
         ))
         w.note("Étude indicative fondée sur les principes de la NF EN 12831-1. Les valeurs estimées ou inconnues sont signalées ; " +
@@ -150,17 +151,23 @@ class PdfReportGenerator @Inject constructor(
         )
     }
 
-    private fun envelope(w: Writer, p: Project) {
+    private fun envelope(w: Writer, p: Project, r: StudyResult) {
         w.heading("3. Matériaux et isolation")
         val b = p.building
         for (room in b.rooms) {
             w.subheading(room.name)
+            val elements = r.heatLoss.rooms.firstOrNull { it.roomId == room.id }?.elements.orEmpty()
             val rows = room.surfaces.map { s ->
-                val u = SurfaceGeometry.resolveU(s)
+                // U réellement retenu par le bilan (U équivalent EN ISO 13370 pour un terre-plein).
+                val resolved = SurfaceGeometry.resolveU(s)
+                val el = elements.firstOrNull { it.surfaceId == s.id && it.openingId == null }
+                val uValue = el?.uValue ?: resolved.value
+                val uOrigin = el?.uOrigin ?: resolved.origin
+                val equivalent = el?.category == LossCategory.GROUND
                 val comp = if (s.layers.isEmpty()) (if (s.uValueOverride != null) "U saisi" else "non renseignée")
                 else s.layers.joinToString(" + ") { "${it.material.name} ${n(it.thicknessM * 100, 1)} cm" }
                 listOf(s.label.ifBlank { s.kind.label }, s.boundary.label, a(SurfaceGeometry.netOpaqueArea(s, room)), comp,
-                    "${n(u.value, 2)} (${u.origin.label.lowercase()})")
+                    "${n(uValue, 2)}${if (equivalent) " éq." else ""} (${uOrigin.label.lowercase()})")
             }
             w.table(listOf("Paroi", "Donne sur", "Surface nette", "Composition (int. → ext.)", "U"), rows, floatArrayOf(0.17f, 0.15f, 0.12f, 0.40f, 0.16f))
             val openings = room.surfaces.flatMap { s -> s.openings.map { s to it } }
@@ -256,18 +263,24 @@ class PdfReportGenerator @Inject constructor(
         w.heading("7. Compatibilité avec une pompe à chaleur")
         val s = p.settings
         w.keyValues(listOf(
-            "Température de départ nécessaire" to (r.supply.requiredSupplyC?.let { "${n(it, 1)} °C" } ?: "non atteignable sous 90 °C"),
-            "Hypothèse prudente (borne basse)" to (r.supplyConservative.requiredSupplyC?.let { "${n(it, 1)} °C" } ?: "non atteignable"),
+            "Température de départ nécessaire" to supplyText(r.supply),
+            "Hypothèse prudente (borne basse)" to supplyText(r.supplyConservative),
             "Pièce dimensionnante" to (r.supply.limitingRoom?.roomName ?: "–"),
             "Compatibilité estimée" to "${r.compatibility.label} – ${r.compatibility.description}",
             "Loi d'eau" to "${n(s.heatingCurve.designSupplyC, 0)} °C à ${n(s.heatingCurve.designOutdoorC, 0)} °C ext., pied ${n(s.heatingCurve.footSupplyC, 0)} °C à ${n(s.heatingCurve.footOutdoorC, 0)} °C",
-            "SCOP estimé" to (r.seasonal?.let { "${n(it.scop, 2)}" + if (it.generic) " (modèle générique)" else " (données constructeur)" } ?: "–"),
+            "SCOP estimé" to (r.seasonal?.let {
+                "${n(it.scop, 2)}" + when {
+                    it.generic -> " (modèle générique)"
+                    it.extrapolated -> " (données constructeur, transposées hors de leur plage)"
+                    else -> " (données constructeur)"
+                } + if (!it.capacityKnown) " – puissance PAC inconnue : appoint non évalué" else ""
+            } ?: "–"),
         ))
         val perf = HeatPumpPerformance(s.heatPump, s.genericCarnotEfficiency)
         val bv = HeatPumpAnalysis.bivalence(r.heatLoss.totalKw, r.building.setpointC, r.building.climate.designOutdoorTempC, s.heatingCurve, perf)
         w.keyValues(listOf(
             "PAC étudiée" to listOf(s.heatPump.name, s.heatPump.manufacturer, s.heatPump.reference).filter { it.isNotBlank() }.joinToString(" · "),
-            "Puissance PAC à θe" to (bv.capacityAtDesignKw?.let { "${n(it, 1)} kW" } ?: "inconnue"),
+            "Puissance PAC à θe" to (bv.capacityAtDesignKw?.let { "${n(it, 1)} kW" + if (bv.capacityExtrapolated) " (transposée hors plage constructeur)" else "" } ?: "inconnue"),
             "Point de bivalence" to when { bv.capacityAtDesignKw == null -> "indéterminé"; bv.bivalentTempC == null -> "PAC suffisante jusqu'à θe"; else -> "${n(bv.bivalentTempC, 1)} °C" },
         ))
         w.note("Le besoin du bâtiment à θe ne doit pas être confondu avec la puissance commerciale nominale d'une PAC (souvent annoncée à +7 °C / 35 °C).")
@@ -512,6 +525,13 @@ class PdfReportGenerator @Inject constructor(
     }
 
     // ------------------------------------------------------------------ Format
+
+    /** Température de départ nécessaire, en distinguant « non atteignable » de « indéterminée ». */
+    private fun supplyText(s: BuildingSupplyRequirement): String = when {
+        s.requiredSupplyC != null -> "${n(s.requiredSupplyC, 1)} °C"
+        s.rooms.none { it.hasEmitters } -> "indéterminée (aucun radiateur validé)"
+        else -> "non atteignable sous 90 °C (" + s.uncoverableRooms.joinToString { it.roomName } + ")"
+    }
 
     private fun n(v: Double?, d: Int): String = v?.let { String.format(Locale.FRANCE, "%.${d}f", it) } ?: "–"
 

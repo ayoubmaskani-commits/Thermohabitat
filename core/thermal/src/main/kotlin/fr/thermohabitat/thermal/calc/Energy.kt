@@ -92,13 +92,24 @@ object EnergyEstimator {
         settings: EnergySettings,
         heatPumpScop: Double?,
         carriers: List<EnergyCarrier> = EnergyCarrier.entries,
+        /**
+         * Besoin modélisé (kWh/an) du bâtiment sur lequel la consommation a été constatée (état actuel).
+         * Null : le bâtiment estimé est l'état actuel. Pour un scénario, le rapport de calage réel/modèle
+         * de l'état actuel est appliqué au besoin modélisé du bâtiment modifié.
+         */
+        calibrationReferenceNeedKwh: Double? = null,
     ): EnergyEstimate {
         val need = annualNeedKwh(heatLossCoefficientWk, degreeDays, settings.intermittenceFactor)
+        val referenceNeed = calibrationReferenceNeedKwh ?: need
         val calibration = settings.currentAnnualConsumption?.takeIf { it > 0 }?.let { c ->
             val delivered = c * settings.currentCarrier.kwhPerUnit * settings.currentEfficiency
-            ConsumptionCalibration(c, settings.currentCarrier.unit, delivered, need)
+            ConsumptionCalibration(c, settings.currentCarrier.unit, delivered, referenceNeed)
         }
-        val basis = calibration?.deliveredHeatKwh ?: need
+        val basis = when {
+            calibration == null -> need
+            calibration.modelledNeedKwh > 0 -> need * calibration.ratio
+            else -> calibration.deliveredHeatKwh
+        }
         val scop = settings.heatPumpScopOverride ?: heatPumpScop ?: EnergyCarrier.HEAT_PUMP.defaultEfficiency
 
         fun estimateFor(c: EnergyCarrier, eff: Double): CarrierEstimate {
@@ -112,8 +123,8 @@ object EnergyEstimator {
         val current = estimateFor(settings.currentCarrier, currentEff)
         val list = carriers.map { c ->
             val eff = when (c) {
+                settings.currentCarrier -> currentEff // installation actuelle (PAC comprise) : rendement constaté
                 EnergyCarrier.HEAT_PUMP -> scop
-                settings.currentCarrier -> currentEff
                 else -> settings.efficiencyOf(c)
             }
             estimateFor(c, eff).let { it.copy(savingsVsCurrentEur = current.costEur - it.costEur) }
@@ -124,11 +135,18 @@ object EnergyEstimator {
             add("Les DJU base 18 °C supposent ≈ 2 K d'apports gratuits pour une consigne de 20 °C.")
             add("Chauffage seul : l'eau chaude sanitaire n'est pas incluse.")
             if (calibration != null) {
-                add("Calage sur la consommation réelle : ${calibration.measuredConsumption.fr(0)} ${calibration.unit}/an × rendement ${currentEff.fr(2)} = ${calibration.deliveredHeatKwh.fr(0)} kWh utiles (modèle : ${need.fr(0)} kWh).")
+                add("Calage sur la consommation réelle : ${calibration.measuredConsumption.fr(0)} ${calibration.unit}/an × rendement ${currentEff.fr(2)} = ${calibration.deliveredHeatKwh.fr(0)} kWh utiles (modèle de l'état actuel : ${referenceNeed.fr(0)} kWh, rapport ${calibration.ratio.fr(2)}).")
+                if (calibrationReferenceNeedKwh != null) {
+                    add("Rapport de calage appliqué au besoin modélisé après travaux : ${need.fr(0)} × ${calibration.ratio.fr(2)} = ${basis.fr(0)} kWh.")
+                }
             }
-            add("SCOP retenu pour la PAC : ${scop.fr(2)}" + if (settings.heatPumpScopOverride != null) " (saisi)." else if (heatPumpScop != null) " (calculé)." else " (valeur par défaut).")
+            if (settings.currentCarrier == EnergyCarrier.HEAT_PUMP) {
+                add("PAC actuelle : SCOP constaté ${currentEff.fr(2)} (le SCOP calculé ne sert qu'à la PAC étudiée).")
+            } else {
+                add("SCOP retenu pour la PAC : ${scop.fr(2)}" + if (settings.heatPumpScopOverride != null) " (saisi)." else if (heatPumpScop != null) " (calculé)." else " (valeur par défaut).")
+            }
             add("Prix de l'énergie : valeurs saisies ou exemples à mettre à jour.")
         }
-        return EnergyEstimate(heatLossCoefficientWk, degreeDays, need, calibration?.deliveredHeatKwh, calibration, list, assumptions)
+        return EnergyEstimate(heatLossCoefficientWk, degreeDays, need, calibration?.let { basis }, calibration, list, assumptions)
     }
 }

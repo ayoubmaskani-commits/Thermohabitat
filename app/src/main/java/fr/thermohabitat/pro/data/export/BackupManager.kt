@@ -34,7 +34,7 @@ class BackupManager @Inject constructor(
     private val repository: ProjectRepository,
     private val photoStorage: PhotoStorage,
 ) {
-    val exportDir: File get() = File(context.cacheDir, "exports").apply { mkdirs() }
+    val exportDir: File get() = File(context.cacheDir, PhotoStorage.EXPORTS_DIR).apply { mkdirs() }
 
     suspend fun buildBackup(buildingId: Long): ProjectBackup {
         val p = repository.loadProject(buildingId) ?: error("Projet introuvable")
@@ -133,6 +133,7 @@ class BackupManager @Inject constructor(
             photoOwnerTypes = backup.photos.associate { it.fileName to (runCatching { PhotoOwner.valueOf(it.ownerType) }.getOrDefault(PhotoOwner.RADIATOR)) },
             photoFiles = photoFiles,
             nameSuffix = " (importé)",
+            fromBackup = true,
         )
     }
 

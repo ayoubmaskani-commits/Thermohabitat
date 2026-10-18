@@ -217,9 +217,29 @@ class HeatLossCalculator {
     /** Paramètres de sol communs au bâtiment (B' calculé sur l'ensemble des planchers sur terre-plein). */
     internal data class GroundParameters(val bPrime: Double, val wallThicknessM: Double)
 
+    /**
+     * U équivalent EN ISO 13370 d'un plancher sur terre-plein tel que le bilan le calcule (hors U imposé),
+     * null si la paroi n'est pas un plancher sur terre-plein. [surface] remplace sa version dans [building]
+     * (formulaire en cours d'édition).
+     */
+    fun groundEquivalentU(building: Building, surface: Surface): Double? {
+        if (!surface.isGroundFloor) return null
+        val b = building.copy(rooms = building.rooms.map { r -> r.copy(surfaces = r.surfaces.map { if (it.id == surface.id) surface else it }) })
+        val gp = groundParameters(b, mutableListOf()) ?: return null
+        return slabU(gp, surface)
+    }
+
+    private fun slabU(gp: GroundParameters, surface: Surface): Double {
+        val rf = ThermalResistance.layersResistance(surface.layers, HeatFlowDirection.DOWNWARD)
+        return GroundHeatLoss.slabUValue(gp.bPrime, gp.wallThicknessM, rf, surface.ground?.groundConductivity ?: 2.0)
+    }
+
+    private val Surface.isGroundFloor: Boolean get() = boundary == Boundary.GROUND && kind == SurfaceKind.FLOOR
+
     private fun groundParameters(building: Building, warnings: MutableList<String>): GroundParameters? {
+        // B' ne porte que sur les planchers : un mur ou un rampant déclaré « terre-plein » est traité à part.
         val groundFloors = building.rooms.flatMap { room ->
-            room.surfaces.filter { it.boundary == Boundary.GROUND }.map { room to it }
+            room.surfaces.filter { it.isGroundFloor }.map { room to it }
         }
         if (groundFloors.isEmpty()) return null
         val area = groundFloors.sumOf { (room, s) -> SurfaceGeometry.grossArea(s, room) }
@@ -228,6 +248,13 @@ class HeatLossCalculator {
         if (perimeter <= 0) {
             perimeter = 4.0 * sqrt(area)
             warnings += "Périmètre exposé des planchers sur terre-plein non renseigné : estimé à ${perimeter.fr(1)} m (emprise carrée)."
+        } else {
+            val missing = groundFloors.filter { (_, s) -> s.ground == null }
+            if (missing.isNotEmpty()) {
+                warnings += "Périmètre exposé non renseigné pour " +
+                    missing.joinToString { (r, s) -> "${r.name} – ${s.label.ifBlank { s.kind.label }}" } +
+                    " : compté 0 m (pièce sans mur extérieur). B' et le U équivalent de tous les planchers sur terre-plein en dépendent."
+            }
         }
         val thicknesses = groundFloors.mapNotNull { it.second.ground?.wallThicknessM }
         val w = if (thicknesses.isEmpty()) 0.4 else thicknesses.average()
@@ -258,19 +285,17 @@ class HeatLossCalculator {
             }
             val net = (gross - openingsArea).coerceAtLeast(0.0)
             val resolved = SurfaceGeometry.resolveU(surface)
-            if (resolved.fromDefault) {
-                warnings += "« ${surface.label.ifBlank { surface.kind.label }} » sans composition : U par défaut ${resolved.value.fr(2)} W/(m²·K)."
-            }
             val label = surface.label.ifBlank { surface.kind.label }
+            if (resolved.fromDefault && !surface.isGroundFloor) {
+                warnings += "« $label » sans composition : U par défaut ${resolved.value.fr(2)} W/(m²·K)."
+            }
 
-            if (surface.boundary == Boundary.GROUND) {
+            if (surface.isGroundFloor) {
                 val g = surface.ground
-                val uEquiv = if (surface.uValueOverride != null) {
-                    surface.uValueOverride
-                } else if (ground != null) {
-                    val rf = ThermalResistance.layersResistance(surface.layers, HeatFlowDirection.DOWNWARD)
-                    GroundHeatLoss.slabUValue(ground.bPrime, ground.wallThicknessM, rf, g?.groundConductivity ?: 2.0)
-                } else resolved.value
+                val uEquiv = surface.uValueOverride ?: ground?.let { slabU(it, surface) } ?: resolved.value
+                if (surface.uValueOverride == null && surface.layers.isEmpty()) {
+                    warnings += "« $label » sans composition : Rf = 0 supposé (U équivalent ${uEquiv.fr(2)} W/(m²·K))."
+                }
                 val f = GroundHeatLoss.F_G1 *
                     GroundHeatLoss.fg2(thetaI, building.climate.meanAnnualOutdoorTempC, thetaE) *
                     GroundHeatLoss.groundwaterFactor(g?.shallowGroundwater ?: false)
@@ -282,9 +307,14 @@ class HeatLossCalculator {
                 continue
             }
 
+            // Mur, plafond ou rampant déclaré « terre-plein » : la méthode du sol ne vaut que pour les planchers.
+            val groundAsExterior = surface.boundary == Boundary.GROUND
+            if (groundAsExterior) {
+                warnings += "« $label » : le contact avec le sol n'est calculé que pour les planchers ; paroi traitée comme donnant sur l'extérieur (prudent)."
+            }
             val f = temperatureFactor(building, room, surface, warnings)
             val isEnvelope = surface.boundary != Boundary.HEATED_ROOM
-            val appliesBridge = surface.boundary == Boundary.EXTERIOR || surface.boundary == Boundary.UNHEATED
+            val appliesBridge = surface.boundary == Boundary.EXTERIOR || surface.boundary == Boundary.UNHEATED || groundAsExterior
             val towardUnheated = surface.boundary == Boundary.UNHEATED
             val category = when {
                 surface.boundary == Boundary.HEATED_ROOM || surface.boundary == Boundary.ADJACENT_BUILDING -> LossCategory.ADJACENT
@@ -340,7 +370,7 @@ class HeatLossCalculator {
         val v = building.ventilation
         val volume = room.volumeM3
         val exposedOpeningFacades = room.surfaces.count { s ->
-            s.boundary == Boundary.EXTERIOR && s.openings.isNotEmpty()
+            (s.boundary == Boundary.EXTERIOR || (s.boundary == Boundary.GROUND && s.kind != SurfaceKind.FLOOR)) && s.openings.isNotEmpty()
         }
         val e = when (exposedOpeningFacades) {
             0 -> 0.0

@@ -153,7 +153,7 @@ fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel
 
             SectionCard("Régime d'eau minimal nécessaire") {
                 val sup = if (options.conservative) d.supplyConservative else d.supply
-                ValueRow("Température de départ minimale", sup.requiredSupplyC?.let { Fmt.temp(it) } ?: "Non atteignable sous 90 °C", emphasize = true)
+                ValueRow("Température de départ minimale", Fmt.supply(sup), emphasize = true)
                 if (!d.fixedFlow) {
                     NumberField("Écart départ/retour du réseau", settings.systemDeltaK, { v -> v?.let { vm.setSystemDelta(it) } }, unit = "K", decimals = 0,
                         nullable = false, min = 3.0, max = 25.0, supportingText = "PAC : souvent 5 à 7 K ; chaudière : 10 à 20 K")

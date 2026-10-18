@@ -68,7 +68,7 @@ fun SimulationsScreen(nav: NavController, vm: SimulationsViewModel = hiltViewMod
             SectionCard(a.project.entity.name, subtitle = "Synthèse au régime d'étude ${a.result.studyCoverage.supplyC.toInt()}/${a.result.studyCoverage.returnC?.toInt() ?: "–"} °C") {
                 ValueRow("Puissance nécessaire", Fmt.kw(a.result.heatLoss.totalW))
                 ValueRow("Besoins couverts par les radiateurs validés", Fmt.pct(a.result.studyCoverage.coveredFraction))
-                ValueRow("Température de départ nécessaire", a.result.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "Non atteignable / indéterminée")
+                ValueRow("Température de départ nécessaire", Fmt.supply(a.result.supply))
                 ValueRow("Compatibilité PAC estimée", a.result.compatibility.label, emphasize = true)
                 Text(a.result.compatibility.description, style = MaterialTheme.typography.bodySmall)
             }

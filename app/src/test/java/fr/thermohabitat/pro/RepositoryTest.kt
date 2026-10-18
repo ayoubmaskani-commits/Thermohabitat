@@ -177,4 +177,65 @@ class RepositoryTest {
         val rooms = CsvExporter.rooms(result).trimEnd().lines()
         assertThat(rooms).hasSize(1 + 8 + 1)
     }
+
+    @Test
+    fun `import : les scenarios suivent la renumerotation des pieces et radiateurs`() = runBlocking {
+        repo.insertGraph(SampleProjects.pise1870(), StudySettings()) // décale les identifiants du projet suivant
+        val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
+        val p = repo.loadProject(id)!!
+        val rad = p.building.radiators.first()
+        val room = p.building.rooms.first()
+        val replacement = fr.thermohabitat.thermal.model.Radiator(code = "N1", type = RadiatorType.STEEL_PANEL, nominalPowerW = 2500.0,
+            nominalPowerOrigin = fr.thermohabitat.thermal.model.ValueOrigin.DECLARED)
+        val sc = Scenario(name = "Émetteurs", modifications = listOf(
+            Modification.ReplaceRadiator(rad.id, replacement),
+            Modification.AddRadiator(replacement.copy(code = "N2", roomId = room.id)),
+            Modification.ChangeSetpoint(19.0, listOf(room.id)),
+        ))
+        repo.saveScenario(id, sc)
+        val backup = BackupManager(context, repo, photos)
+        val importedId = backup.import(android.net.Uri.fromFile(backup.zipToCache(id, p.entity.name)))
+        val imported = repo.loadProject(importedId)!!
+        val isc = repo.scenariosOf(importedId).single()
+        val mods = isc.modifications
+        assertThat(mods).hasSize(3)
+        val newRad = (mods[0] as Modification.ReplaceRadiator).radiatorId
+        assertThat(imported.building.radiators.map { it.id }).contains(newRad)
+        assertThat(imported.building.radiators.single { it.id == newRad }.code).isEqualTo(rad.code)
+        val newRoom = (mods[1] as Modification.AddRadiator).radiator.roomId
+        assertThat(imported.building.rooms.single { it.id == newRoom }.name).isEqualTo(room.name)
+        assertThat((mods[2] as Modification.ChangeSetpoint).roomIds).containsExactly(newRoom)
+        // Même effet du scénario sur l'original et sur la copie importée.
+        val analyzer = StudyAnalyzer()
+        val original = fr.thermohabitat.thermal.ScenarioComparison.of(analyzer, p.building, p.settings, sc)
+        val copy = fr.thermohabitat.thermal.ScenarioComparison.of(analyzer, imported.building, imported.settings, isc)
+        assertThat(copy.after.studyCoverage.totalAvailableW).isWithin(1e-6).of(original.after.studyCoverage.totalAvailableW)
+        assertThat(copy.heatLossReductionW).isWithin(1e-6).of(original.heatLossReductionW)
+    }
+
+    @Test
+    fun `import : les materiaux gardent les valeurs de la sauvegarde`() = runBlocking {
+        val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
+        val p = repo.loadProject(id)!!
+        val backup = BackupManager(context, repo, photos)
+        val zip = backup.zipToCache(id, p.entity.name)
+        // Après l'export, le matériau « pisé » de l'appareil est modifié.
+        val pise = db.materialDao().byCode("pise")!!
+        materials.update(pise.copy(lambda = pise.lambda * 2))
+        val imported = repo.loadProject(backup.import(android.net.Uri.fromFile(zip)))!!
+        val layers = imported.building.rooms.flatMap { r -> r.surfaces.flatMap { it.layers } }.filter { it.material.name.startsWith("Pisé") }
+        assertThat(layers).isNotEmpty()
+        assertThat(layers.all { it.material.lambda == pise.lambda }).isTrue()
+        assertThat(HeatLossCalculator().calculate(imported.building).totalW)
+            .isWithin(1e-6).of(HeatLossCalculator().calculate(p.building).totalW)
+    }
+
+    @Test
+    fun `suppression d'un projet : les exports generes sont effaces`() = runBlocking {
+        val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
+        val zip = BackupManager(context, repo, photos).zipToCache(id, "Exemple")
+        assertThat(zip.exists()).isTrue()
+        repo.deleteBuilding(id)
+        assertThat(zip.exists()).isFalse()
+    }
 }

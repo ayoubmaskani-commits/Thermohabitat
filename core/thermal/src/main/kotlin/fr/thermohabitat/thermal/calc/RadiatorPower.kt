@@ -119,6 +119,14 @@ object RadiatorPower {
      * Puissance nominale retenue : valeur documentée si elle existe, sinon estimation géométrique.
      * Retourne null si aucune puissance ne peut être établie honnêtement.
      */
+    /**
+     * Émetteur retenu dans le bilan : validé ET puissance nominale établie à des conditions de référence
+     * cohérentes. Une fiche validée dont la puissance est devenue indéterminable compte comme « en attente »
+     * (puissance inconnue), jamais comme un émetteur de 0 W.
+     */
+    fun countsInStudy(radiator: Radiator): Boolean =
+        radiator.validated && resolveNominal(radiator)?.let { it.nominalW > 0 && it.rating.isValid } == true
+
     fun resolveNominal(radiator: Radiator): NominalPower? {
         val n = radiator.effectiveExponent
         val documented = radiator.nominalPowerW

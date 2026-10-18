@@ -1,6 +1,9 @@
 package fr.thermohabitat.thermal.scenario
 
 import fr.thermohabitat.thermal.calc.Regime
+import fr.thermohabitat.thermal.calc.SurfaceGeometry
+import fr.thermohabitat.thermal.calc.ThermalResistance
+import fr.thermohabitat.thermal.calc.heatFlowDirection
 import fr.thermohabitat.thermal.fr
 import fr.thermohabitat.thermal.model.Boundary
 import fr.thermohabitat.thermal.model.Building
@@ -184,10 +187,21 @@ object ScenarioEngine {
             }
             InsulationPosition.EXTERIOR -> s.layers + insulation
         }
-        // Une valeur U imposée ne permet pas d'ajouter une couche : on la convertit en résistance équivalente.
-        return if (s.uValueOverride != null && s.layers.isEmpty()) {
-            val rAdded = m.thicknessM / m.material.lambda + (m.finish?.let { m.finishThicknessM / it.lambda } ?: 0.0)
-            s.copy(uValueOverride = 1.0 / (1.0 / s.uValueOverride + rAdded), uValueOrigin = ValueOrigin.ESTIMATED)
+        val dir = s.kind.heatFlowDirection
+        // Résistance réellement ajoutée, avec les mêmes règles que le calcul (lames d'air, λ borné).
+        val rAdded = ThermalResistance.layersResistance(newLayers, dir) - ThermalResistance.layersResistance(s.layers, dir)
+        // On part du U réellement utilisé « avant » : U imposé (prioritaire sur la composition) ou U par défaut
+        // d'une paroi sans composition. Un plancher sur terre-plein sans U imposé garde le calcul EN ISO 13370 (Rf).
+        val fromResolvedU = s.uValueOverride != null || (s.layers.isEmpty() && s.boundary != Boundary.GROUND)
+        return if (fromResolvedU) {
+            val u0 = SurfaceGeometry.resolveU(s)
+            s.copy(
+                // Les couches ajoutées sont conservées si une composition existe (inertie, rapport), mais l'isolant seul
+                // ne devient pas la composition d'une paroi qui n'en avait pas (elle paraîtrait légère).
+                layers = if (s.layers.isEmpty()) s.layers else newLayers,
+                uValueOverride = 1.0 / (1.0 / u0.value + rAdded),
+                uValueOrigin = if (u0.origin == ValueOrigin.UNKNOWN) ValueOrigin.UNKNOWN else ValueOrigin.ESTIMATED,
+            )
         } else {
             s.copy(layers = newLayers, uValueOverride = null)
         }

@@ -398,8 +398,11 @@ private fun AddSurfaceDialog(onDismiss: () -> Unit, onCreate: (SurfaceKind, Boun
         title = { Text("Nouvelle paroi") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChips(SurfaceKind.entries, kind, { it.label }, { kind = it })
-                DropdownField("Donne sur", Boundary.entries, boundary, { it.label }, { boundary = it })
+                ChoiceChips(SurfaceKind.entries, kind, { it.label }, {
+                    kind = it
+                    if (it != SurfaceKind.FLOOR && boundary == Boundary.GROUND) boundary = Boundary.EXTERIOR
+                })
+                DropdownField("Donne sur", boundariesFor(kind), boundary, { it.label }, { boundary = it })
             }
         },
         confirmButton = { TextButton(onClick = { onCreate(kind, boundary) }) { Text("Créer") } },

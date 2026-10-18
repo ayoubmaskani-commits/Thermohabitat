@@ -26,7 +26,8 @@ data class HeatingCurve(
         val span = footOutdoorC - designOutdoorC
         val t = if (abs(span) < 1e-9) 0.0 else (outdoorC - designOutdoorC) / span
         val raw = designSupplyC + t * (footSupplyC - designSupplyC)
-        return raw.coerceIn(minSupplyC, maxSupplyC)
+        // Bornes saisies dans le désordre (saisie en cours, import) : jamais d'exception.
+        return raw.coerceIn(minOf(minSupplyC, maxSupplyC), maxOf(minSupplyC, maxSupplyC))
     }
 
     /** Pente de la courbe (K d'eau par K extérieur). */
@@ -66,6 +67,7 @@ data class HeatPumpOperatingPoint(
     val cop: Double,
     /** Vrai si la valeur provient du modèle générique et non des données constructeur. */
     val generic: Boolean,
+    /** Vrai si le point est hors de la plage des données constructeur (valeur transposée ou bornée). */
     val extrapolated: Boolean,
 )
 
@@ -87,14 +89,14 @@ class HeatPumpPerformance(
     fun at(outdoorC: Double, waterC: Double): HeatPumpOperatingPoint {
         var extrapolated = false
         val cop = if (copPoints.isNotEmpty()) {
-            val (v, ex) = interpolate(copPoints, outdoorC, waterC) { it.cop!! }
+            val (v, ex) = interpolate(copPoints, outdoorC, waterC, Companion::carnotRatio) { it.cop!! }
             extrapolated = extrapolated || ex
-            v
+            v.coerceAtLeast(1.0)
         } else genericCop(outdoorC, waterC, carnotEfficiency)
 
         val capacity: Double? = when {
             capacityPoints.size >= 2 -> {
-                val (v, ex) = interpolate(capacityPoints, outdoorC, waterC) { it.capacityKw!! }
+                val (v, ex) = interpolate(capacityPoints, outdoorC, waterC, Companion::capacityRatio) { it.capacityKw!! }
                 extrapolated = extrapolated || ex
                 v
             }
@@ -114,12 +116,23 @@ class HeatPumpPerformance(
          * COP générique : η · Tchaud / (Tchaud − Tfroid), avec un pincement de 3 K au condenseur
          * et de 8 K à l'évaporateur. Borné entre 1 et 7.
          */
-        fun genericCop(outdoorC: Double, waterC: Double, efficiency: Double = 0.50): Double {
+        fun genericCop(outdoorC: Double, waterC: Double, efficiency: Double = 0.50): Double =
+            (efficiency * carnotCop(outdoorC, waterC)).coerceIn(1.0, 7.0)
+
+        /** COP de Carnot avec les pincements du modèle générique (sans rendement ni bornes). */
+        internal fun carnotCop(outdoorC: Double, waterC: Double): Double {
             val th = waterC + 273.15 + 3.0
             val tc = outdoorC + 273.15 - 8.0
-            val carnot = th / (th - tc).coerceAtLeast(1.0)
-            return (efficiency * carnot).coerceIn(1.0, 7.0)
+            return th / (th - tc).coerceAtLeast(1.0)
         }
+
+        /** Transposition d'un COP constructeur hors plage : rapport des COP de Carnot. */
+        internal fun carnotRatio(refOutdoorC: Double, refWaterC: Double, outdoorC: Double, waterC: Double): Double =
+            carnotCop(outdoorC, waterC) / carnotCop(refOutdoorC, refWaterC)
+
+        /** Transposition d'une puissance constructeur hors plage : tendances du modèle générique. */
+        internal fun capacityRatio(refOutdoorC: Double, refWaterC: Double, outdoorC: Double, waterC: Double): Double =
+            genericCapacity(1.0, refOutdoorC, refWaterC, outdoorC, waterC)
 
         /**
          * Puissance générique à partir d'un point connu : −2,5 %/K lorsque la température extérieure baisse
@@ -132,20 +145,27 @@ class HeatPumpPerformance(
 
         /**
          * Interpolation sur des points dispersés : linéaire en température extérieure pour chaque
-         * température d'eau, puis linéaire entre températures d'eau. Bornée aux extrémités.
+         * température d'eau, puis linéaire entre températures d'eau. Hors plage, dans le sens
+         * défavorable (plus froid dehors, eau plus chaude), la valeur extrême est transposée par
+         * [beyond] (rapport appliqué depuis le point de référence) ; dans le sens favorable elle est
+         * simplement bornée, ce qui reste prudent.
          */
         internal fun interpolate(
             points: List<HeatPumpPoint>,
             outdoorC: Double,
             waterC: Double,
+            beyond: ((refOutdoorC: Double, refWaterC: Double, outdoorC: Double, waterC: Double) -> Double)? = null,
             value: (HeatPumpPoint) -> Double,
         ): Pair<Double, Boolean> {
             var extrapolated = false
             val byWater = points.groupBy { it.waterC }.toSortedMap()
-            fun alongOutdoor(list: List<HeatPumpPoint>): Double {
-                val sorted = list.sortedBy { it.outdoorC }
+            fun alongOutdoor(water: Double): Double {
+                val sorted = byWater.getValue(water).sortedBy { it.outdoorC }
                 if (outdoorC < sorted.first().outdoorC || outdoorC > sorted.last().outdoorC) extrapolated = true
-                if (outdoorC <= sorted.first().outdoorC) return value(sorted.first())
+                if (outdoorC <= sorted.first().outdoorC) {
+                    val p = sorted.first()
+                    return value(p) * (beyond?.invoke(p.outdoorC, water, outdoorC, water) ?: 1.0)
+                }
                 if (outdoorC >= sorted.last().outdoorC) return value(sorted.last())
                 for (i in 1 until sorted.size) {
                     val a = sorted[i - 1]; val b = sorted[i]
@@ -159,12 +179,15 @@ class HeatPumpPerformance(
             val waters = byWater.keys.toList()
             if (waterC < waters.first() || waterC > waters.last()) extrapolated = true
             val result = when {
-                waters.size == 1 || waterC <= waters.first() -> alongOutdoor(byWater.getValue(waters.first()))
-                waterC >= waters.last() -> alongOutdoor(byWater.getValue(waters.last()))
+                waterC <= waters.first() -> alongOutdoor(waters.first())
+                waterC >= waters.last() -> {
+                    val w = waters.last()
+                    alongOutdoor(w) * (beyond?.invoke(outdoorC, w, outdoorC, waterC) ?: 1.0)
+                }
                 else -> {
                     val i = waters.indexOfFirst { it >= waterC }
                     val w0 = waters[i - 1]; val w1 = waters[i]
-                    val v0 = alongOutdoor(byWater.getValue(w0)); val v1 = alongOutdoor(byWater.getValue(w1))
+                    val v0 = alongOutdoor(w0); val v1 = alongOutdoor(w1)
                     v0 + (waterC - w0) / (w1 - w0) * (v1 - v0)
                 }
             }
@@ -189,6 +212,8 @@ data class BivalenceResult(
     /** Appoint nécessaire à θe, kW. */
     val backupAtDesignKw: Double?,
     val points: List<BivalencePoint>,
+    /** Puissance à θe hors de la plage des données constructeur (transposée). */
+    val capacityExtrapolated: Boolean = false,
 ) {
     val coversDesignLoad: Boolean get() = capacityAtDesignKw != null && capacityAtDesignKw >= designLoadKw
 }
@@ -202,6 +227,10 @@ data class SeasonalPerformance(
     val electricityKwh: Double,
     val climateLabel: String,
     val generic: Boolean,
+    /** Au moins une classe hors de la plage des données constructeur (valeurs transposées). */
+    val extrapolated: Boolean = false,
+    /** Faux si la puissance de la PAC est inconnue : l'appoint ne peut alors pas être évalué. */
+    val capacityKnown: Boolean = true,
 ) {
     /** Part de la chaleur fournie par l'appoint (0–1). */
     val backupShare: Double get() = if (heatDemandKwh > 0) backupHeatKwh / heatDemandKwh else 0.0
@@ -235,10 +264,12 @@ object HeatPumpAnalysis {
         stepK: Double = 0.5,
     ): BivalenceResult {
         val points = mutableListOf<BivalencePoint>()
+        var designExtrapolated = false
         var t = designOutdoorC
         while (t <= interiorC - 1.0 + 1e-9) {
             val supply = curve.supplyAt(t)
             val op = performance.at(t, supply)
+            if (points.isEmpty()) designExtrapolated = op.extrapolated
             points += BivalencePoint(t, loadAt(designLoadKw, interiorC, designOutdoorC, t), op.capacityKw, supply, op.cop)
             t += stepK
         }
@@ -264,6 +295,7 @@ object HeatPumpAnalysis {
             capacityAtDesignKw = capDesign,
             backupAtDesignKw = capDesign?.let { (designLoadKw - it).coerceAtLeast(0.0) },
             points = points,
+            capacityExtrapolated = capDesign != null && designExtrapolated,
         )
     }
 
@@ -287,6 +319,8 @@ object HeatPumpAnalysis {
         var backup = 0.0
         var elec = 0.0
         var generic = false
+        var extrapolated = false
+        var capacityKnown = true
         for ((tj, hours) in EN14825_AVERAGE_BINS) {
             val t = tj + binShiftK
             if (t >= balanceC) continue
@@ -294,6 +328,8 @@ object HeatPumpAnalysis {
             if (load <= 0) continue
             val op = performance.at(t, curve.supplyAt(t))
             generic = generic || op.generic
+            extrapolated = extrapolated || op.extrapolated
+            if (op.capacityKw == null) capacityKnown = false
             val cap = op.capacityKw ?: Double.POSITIVE_INFINITY
             val fromHp = minOf(load, cap)
             val fromBackup = load - fromHp
@@ -303,6 +339,6 @@ object HeatPumpAnalysis {
             elec += fromHp * hours / op.cop + fromBackup * hours
         }
         val scop = if (elec > 0) demand / elec else 0.0
-        return SeasonalPerformance(scop, demand, hpHeat, backup, elec, "Climat moyen NF EN 14825", generic)
+        return SeasonalPerformance(scop, demand, hpHeat, backup, elec, "Climat moyen NF EN 14825", generic, extrapolated, capacityKnown)
     }
 }

@@ -69,6 +69,7 @@ import fr.thermohabitat.pro.ui.components.ValueRow
 import fr.thermohabitat.pro.ui.navigation.SurfaceEditRoute
 import fr.thermohabitat.pro.ui.util.AutoSaver
 import fr.thermohabitat.pro.ui.util.Fmt
+import fr.thermohabitat.thermal.calc.HeatLossCalculator
 import fr.thermohabitat.thermal.calc.SurfaceGeometry
 import fr.thermohabitat.thermal.calc.ThermalResistance
 import fr.thermohabitat.thermal.calc.heatFlowDirection
@@ -98,7 +99,12 @@ data class SurfaceScreenState(
     val room: RoomEntity? = null,
     val siblings: List<RoomEntity> = emptyList(),
     val materials: List<MaterialEntity> = emptyList(),
+    /** Bâtiment complet (calcul du U équivalent d'un terre-plein, qui dépend de tous les planchers). */
+    val building: fr.thermohabitat.thermal.model.Building? = null,
 )
+
+/** Le terre-plein (EN ISO 13370) n'est proposé que pour les planchers. */
+fun boundariesFor(kind: SurfaceKind): List<Boundary> = Boundary.entries.filter { it != Boundary.GROUND || kind == SurfaceKind.FLOOR }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -115,12 +121,11 @@ class SurfaceEditViewModel @Inject constructor(
 
     private val detailsFlow = repository.observeSurface(surfaceId)
     private val roomFlow = detailsFlow.filterNotNull().map { it.surface.roomId }.flatMapLatest { repository.observeRoom(it) }
-    private val siblingsFlow = roomFlow.flatMapLatest { r ->
-        if (r == null) flowOf(emptyList())
-        else repository.observeProject(r.buildingId).map { p -> p?.rooms?.map { it.room }.orEmpty() }
-    }
+    private val projectFlow = roomFlow.flatMapLatest { r -> if (r == null) flowOf(null) else repository.observeProject(r.buildingId) }
 
-    val state = combine(detailsFlow, roomFlow, siblingsFlow, materials.observeAll()) { d, r, s, m -> SurfaceScreenState(d, r, s, m) }
+    val state = combine(detailsFlow, roomFlow, projectFlow, materials.observeAll()) { d, r, p, m ->
+        SurfaceScreenState(d, r, p?.rooms?.map { it.room }.orEmpty(), m, p?.building)
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SurfaceScreenState())
 
     init { viewModelScope.launch { _form.value = repository.getSurface(surfaceId) } }
@@ -172,6 +177,7 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
         val materialMap = state.materials.associate { it.id to it.toModel() }
         // Paroi courante (formulaire + couches/baies en base) convertie pour le moteur → calculs en direct.
         val model = details?.copy(surface = s)?.toModel(materialMap)
+        val isGroundFloor = s.boundary == Boundary.GROUND && s.kind == SurfaceKind.FLOOR
         val roomModel = room?.let {
             fr.thermohabitat.thermal.model.Room(id = it.id, name = it.name, lengthM = it.lengthM, widthM = it.widthM, heightM = it.heightM,
                 floorAreaOverrideM2 = it.floorAreaOverrideM2)
@@ -180,8 +186,10 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
             SectionCard("Paroi") {
                 TextInput("Libellé", s.label, { v -> vm.update { it.copy(label = v) } })
                 Text("Type", style = MaterialTheme.typography.labelLarge)
-                ChoiceChips(SurfaceKind.entries, s.kind, { it.label }, { v -> vm.update { it.copy(kind = v) } })
-                DropdownField("Donne sur", Boundary.entries, s.boundary, { it.label }, { v -> vm.update { it.copy(boundary = v) } })
+                ChoiceChips(SurfaceKind.entries, s.kind, { it.label }, { v ->
+                    vm.update { it.copy(kind = v, boundary = if (v != SurfaceKind.FLOOR && it.boundary == Boundary.GROUND) Boundary.EXTERIOR else it.boundary) }
+                })
+                DropdownField("Donne sur", boundariesFor(s.kind), s.boundary, { it.label }, { v -> vm.update { it.copy(boundary = v) } })
                 if (s.kind == SurfaceKind.WALL || s.kind == SurfaceKind.ROOF) {
                     DropdownField("Orientation", listOf<Orientation?>(null) + Orientation.entries, s.orientation, { it?.label ?: "Non précisée" },
                         { v -> vm.update { it.copy(orientation = v) } })
@@ -220,12 +228,17 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
                     OutlinedButton(onClick = { addLayerInterior = true }) { Icon(Icons.Filled.Add, null); Text(" Côté intérieur") }
                     OutlinedButton(onClick = { addLayerInterior = false }) { Icon(Icons.Filled.Add, null); Text(" Côté extérieur") }
                 }
+                // U équivalent EN ISO 13370 tel que le bilan le calcule (hors U imposé).
+                val groundU = model?.takeIf { isGroundFloor }?.let { m ->
+                    state.building?.let { b -> HeatLossCalculator().groundEquivalentU(b, m.copy(uValueOverride = null)) }
+                }
                 if (model != null) {
                     val dir = s.kind.heatFlowDirection
                     HorizontalDivider()
-                    if (s.boundary == Boundary.GROUND) {
+                    if (isGroundFloor) {
                         ValueRow("Résistance du plancher Rf", "${Fmt.num(ThermalResistance.layersResistance(model.layers, dir), 2)} m²·K/W")
-                        Text("Le U équivalent du terre-plein (EN ISO 13370) dépend de l'ensemble des planchers du bâtiment : il est calculé dans le bilan.",
+                        groundU?.let { ValueRow("U équivalent calculé (EN ISO 13370)", "${Fmt.num(it, 3)} W/(m²·K)", emphasize = true) }
+                        Text("Le U équivalent du terre-plein dépend de l'ensemble des planchers du bâtiment (B').",
                             style = MaterialTheme.typography.bodySmall)
                     } else if (model.layers.isNotEmpty()) {
                         val rt = ThermalResistance.totalResistance(model.layers, s.kind, s.boundary)
@@ -234,10 +247,12 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
                     }
                 }
                 SwitchRow("Imposer un coefficient U", s.uValueOverride != null, { on ->
-                    vm.update { it.copy(uValueOverride = if (on) (model?.let { m -> SurfaceGeometry.resolveU(m).value } ?: 1.0) else null) }
+                    // Pré-remplissage avec la valeur réellement utilisée par le bilan : imposer sans modifier ne change rien.
+                    val prefill = if (isGroundFloor) groundU else model?.let { m -> SurfaceGeometry.resolveU(m.copy(uValueOverride = null)).value }
+                    vm.update { it.copy(uValueOverride = if (on) (prefill ?: 1.0) else null) }
                 }, description = "Valeur connue (étude, fiche technique, mesure) prioritaire sur la composition")
                 if (s.uValueOverride != null) {
-                    NumberField(if (s.boundary == Boundary.GROUND) "U équivalent" else "U", s.uValueOverride, { v -> vm.update { it.copy(uValueOverride = v) } },
+                    NumberField(if (isGroundFloor) "U équivalent" else "U", s.uValueOverride, { v -> vm.update { it.copy(uValueOverride = v) } },
                         unit = "W/(m²·K)", decimals = 3, min = 0.01, max = 10.0)
                     OriginSelector(s.uValueOrigin, { o -> vm.update { it.copy(uValueOrigin = o) } })
                 }
@@ -291,7 +306,10 @@ private fun BoundarySection(s: SurfaceEntity, siblings: List<RoomEntity>, vm: Su
             NumberField("Température supposée du mitoyen", s.adjacentTemperatureC, { v -> vm.update { it.copy(adjacentTemperatureC = v) } }, unit = "°C",
                 decimals = 1, supportingText = "Vide : 15 °C supposés")
         }
-        Boundary.GROUND -> SectionCard("Contact avec le sol (EN ISO 13370)") {
+        Boundary.GROUND -> if (s.kind != SurfaceKind.FLOOR) {
+            InfoBanner("Le contact avec le sol n'est calculé que pour les planchers : cette paroi est traitée comme donnant sur l'extérieur. " +
+                "Choisissez « Extérieur » ou corrigez le type de paroi.", kind = BannerKind.WARNING)
+        } else SectionCard("Contact avec le sol (EN ISO 13370)") {
             NumberField("Périmètre exposé de ce plancher", s.groundExposedPerimeterM, { v -> vm.update { it.copy(groundExposedPerimeterM = v) } }, unit = "m",
                 decimals = 2, min = 0.0, supportingText = "Longueur des murs extérieurs bordant ce plancher")
             NumberField("Épaisseur des murs périphériques", s.groundWallThicknessM, { v -> vm.update { it.copy(groundWallThicknessM = v) } }, unit = "m", decimals = 2, min = 0.0)

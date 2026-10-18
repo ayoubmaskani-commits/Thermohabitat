@@ -48,6 +48,25 @@ class MaterialRepository @Inject constructor(private val dao: MaterialDao) {
         return dao.insert(material.toEntity(builtIn = false))
     }
 
+    /**
+     * Matériau d'une sauvegarde importée : le matériau local de même code n'est réutilisé que si ses valeurs
+     * thermiques sont identiques ; sinon une copie personnalisée est créée, pour que le projet importé garde
+     * exactement les valeurs (λ, ρ, c, origine) avec lesquelles il a été étudié.
+     */
+    suspend fun idForImported(material: Material): Long {
+        ensureSeeded()
+        val local = dao.byCode(material.code)?.toModel() ?: return dao.insert(material.toEntity(builtIn = false))
+        if (local.sameThermalValues(material)) return local.id
+        return dao.insert(material.toEntity(builtIn = false).copy(
+            code = "imp_" + UUID.randomUUID().toString().take(8),
+            name = material.name + " (importé)",
+        ))
+    }
+
+    private fun Material.sameThermalValues(o: Material) =
+        lambda == o.lambda && density == o.density && specificHeat == o.specificHeat && origin == o.origin &&
+            lambdaMin == o.lambdaMin && lambdaMax == o.lambdaMax && isInsulation == o.isInsulation && category == o.category
+
     suspend fun idForCode(code: String): Long? { ensureSeeded(); return dao.byCode(code)?.id }
 
     suspend fun createCustom(base: MaterialEntity? = null): Long = dao.insert(

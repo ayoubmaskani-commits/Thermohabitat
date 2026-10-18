@@ -183,7 +183,9 @@ class RadiatorEditViewModel @Inject constructor(
     }
 
     fun update(transform: (RadiatorEntity) -> RadiatorEntity) {
-        val next = transform(_form.value ?: return).copy(updatedAt = System.currentTimeMillis())
+        var next = transform(_form.value ?: return).copy(updatedAt = System.currentTimeMillis())
+        // Une fiche qui ne satisfait plus les conditions de validation est retirée du bilan.
+        if (next.validated && validationIssues(next).isNotEmpty()) next = next.copy(validated = false, validatedAt = null)
         _form.value = next
         saver.submit(next)
     }

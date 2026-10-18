@@ -37,6 +37,13 @@ object Fmt {
 
     fun mm(v: Double?): String = if (v == null) "–" else "${num(v, 0)} mm"
 
+    /** Température de départ nécessaire : distingue « non atteignable » (pièces non couvertes) de « indéterminée ». */
+    fun supply(s: fr.thermohabitat.thermal.calc.BuildingSupplyRequirement, decimals: Int = 1): String = when {
+        s.requiredSupplyC != null -> temp(s.requiredSupplyC, decimals)
+        s.rooms.none { it.hasEmitters } -> "Indéterminée (aucun radiateur validé)"
+        else -> "Non atteignable sous 90 °C"
+    }
+
     fun date(millis: Long): String = DateFormat.getDateInstance(DateFormat.MEDIUM, locale).format(Date(millis))
 
     fun dateTime(millis: Long): String = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, locale).format(Date(millis))

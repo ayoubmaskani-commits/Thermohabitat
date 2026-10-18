@@ -34,7 +34,6 @@ import fr.thermohabitat.pro.ui.components.SectionCard
 import fr.thermohabitat.pro.ui.components.ValueRow
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.calc.EnergyCarrier
-import fr.thermohabitat.thermal.calc.EnergyEstimator
 import fr.thermohabitat.thermal.calc.EnergySettings
 import fr.thermohabitat.thermal.calc.HeatPumpAnalysis
 import fr.thermohabitat.thermal.calc.HeatPumpPerformance
@@ -61,12 +60,15 @@ class EnergyViewModel @Inject constructor(
             val s = a.project.settings
             val hl = a.result.heatLoss
             val perf = HeatPumpPerformance(s.heatPump, s.genericCarnotEfficiency)
-            val impacts = if (hl.totalW <= 0) emptyList() else listOf(35.0, 45.0, 55.0, 65.0).map { t ->
+            // Même assiette que l'étude (DJU corrigés, calage éventuel) ; seule la loi d'eau varie.
+            val basisKwh = a.result.energy.calibratedNeedKwh ?: a.result.energy.annualNeedKwh
+            val hp = EnergyCarrier.HEAT_PUMP
+            val impacts = if (hl.totalW <= 0) emptyList() else listOf(35.0, 45.0, 55.0, 65.0).mapNotNull { t ->
                 val curve = s.heatingCurve.copy(designSupplyC = t, maxSupplyC = maxOf(t, s.heatingCurve.maxSupplyC))
                 val scop = HeatPumpAnalysis.seasonal(hl.totalKw, a.project.building.climate.designOutdoorTempC, curve, perf).scop
-                val est = EnergyEstimator.estimate(hl.totalHWk, a.project.building.climate.degreeDays, a.project.building.climate.degreeDaysBase,
-                    s.energy.copy(heatPumpScopOverride = null), scop, listOf(EnergyCarrier.HEAT_PUMP)).carriers.first()
-                WaterTemperatureImpact(t, scop, est.costEur, est.finalEnergyKwh)
+                if (scop <= 0) return@mapNotNull null
+                val kwh = basisKwh / scop
+                WaterTemperatureImpact(t, scop, kwh / hp.kwhPerUnit * s.energy.priceOf(hp) + (s.energy.subscriptions[hp] ?: 0.0), kwh)
             }
             EnergyData(a, impacts)
         }
@@ -100,7 +102,7 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
                     supportingText = "Production × distribution × émission × régulation (chaudière fioul ancienne : 65 à 80 %)")
                 NumberField("Facteur d'intermittence", e.intermittenceFactor, { v -> v?.let { vm.edit { x -> x.copy(intermittenceFactor = it) } } }, decimals = 2,
                     nullable = false, min = 0.5, max = 1.2, supportingText = "1,0 : chauffage continu ; 0,85–0,95 : réduits nocturnes")
-                ValueRow("Degrés-jours utilisés", "${Fmt.num(climate.degreeDays, 0)} DJU (base ${Fmt.num(climate.degreeDaysBase, 0)} °C, ${climate.degreeDaysOrigin.label.lowercase()})")
+                ValueRow("Degrés-jours utilisés", "${Fmt.num(est.degreeDays, 0)} DJU (climat : ${Fmt.num(climate.degreeDays, 0)} en base ${Fmt.num(climate.degreeDaysBase, 0)} °C, ${climate.degreeDaysOrigin.label.lowercase()})")
             }
 
             SectionCard("Besoins de chauffage", icon = Icons.Filled.Euro) {

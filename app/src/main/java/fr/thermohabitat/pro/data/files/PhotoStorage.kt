@@ -76,8 +76,15 @@ class PhotoStorage @Inject constructor(@ApplicationContext private val context: 
         return opts.outWidth to opts.outHeight
     }
 
+    /** Efface les copies générées (rapports PDF, sauvegardes ZIP/JSON, CSV) partagées via le FileProvider : régénérables. */
+    fun clearExports() {
+        File(context.cacheDir, EXPORTS_DIR).deleteRecursively()
+    }
+
     companion object {
         const val DIR = "photos"
+        /** Dossier du cache où sont écrits les fichiers exportés (voir res/xml/file_paths.xml). */
+        const val EXPORTS_DIR = "exports"
         const val MAX_SIDE_PX = 2560
         const val JPEG_QUALITY = 90
 

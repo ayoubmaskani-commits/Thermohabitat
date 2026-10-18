@@ -37,11 +37,14 @@ import fr.thermohabitat.thermal.model.SurfaceKind
 import fr.thermohabitat.thermal.model.ValueOrigin
 import fr.thermohabitat.thermal.scenario.Scenario
 import fr.thermohabitat.thermal.sim.MeasuredPoint
+import fr.thermohabitat.thermal.scenario.Modification
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import java.io.File
 import javax.inject.Inject
@@ -118,10 +121,14 @@ class ProjectRepository @Inject constructor(
         b.settingsJson.takeIf { it.isNotBlank() }?.let { runCatching { json.decodeFromString(StudySettings.serializer(), it) }.getOrNull() }
             ?: defaultSettings(b)
 
-    fun defaultSettings(b: BuildingEntity) = StudySettings(
-        heatingCurve = HeatingCurve(designOutdoorC = b.designOutdoorTempC, designSupplyC = 55.0, designDeltaK = 7.0),
-        energy = EnergySettings(currentCarrier = carrierFor(b.existingHeating)),
-    )
+    fun defaultSettings(b: BuildingEntity): StudySettings {
+        val carrier = carrierFor(b.existingHeating)
+        return StudySettings(
+            heatingCurve = HeatingCurve(designOutdoorC = b.designOutdoorTempC, designSupplyC = 55.0, designDeltaK = 7.0),
+            // Rendement saisonnier par défaut de l'installation existante (SCOP plausible pour une PAC).
+            energy = EnergySettings(currentCarrier = carrier, currentEfficiency = if (carrier == EnergyCarrier.HEAT_PUMP) carrier.defaultEfficiency else 0.80),
+        )
+    }
 
     private fun carrierFor(h: HeatingSystem) = when (h) {
         HeatingSystem.OIL_BOILER -> EnergyCarrier.FUEL_OIL
@@ -152,9 +159,11 @@ class ProjectRepository @Inject constructor(
     }
 
     /** Suppression complète d'un projet : base de données ET fichiers photo. */
+    /** Suppression complète : base de données, photos ET exports générés (rapports, sauvegardes, CSV contiennent des copies). */
     suspend fun deleteBuilding(id: Long) {
         photoDao.getForBuilding(id).forEach { photoStorage.delete(it.fileName) }
         buildingDao.delete(id)
+        withContext(Dispatchers.IO) { photoStorage.clearExports() }
     }
 
     private suspend fun touch(buildingId: Long) = buildingDao.touch(buildingId)
@@ -495,32 +504,43 @@ class ProjectRepository @Inject constructor(
         photoOwnerTypes: Map<String, PhotoOwner> = emptyMap(),
         photoFiles: Map<String, File> = emptyMap(),
         nameSuffix: String = "",
+        /** Sauvegarde importée : les matériaux gardent leurs valeurs d'origine (copie si la bibliothèque locale diffère). */
+        fromBackup: Boolean = false,
     ): Long {
         materials.ensureSeeded()
         val materialIds = mutableMapOf<String, Long>()
         building.rooms.flatMap { r -> r.surfaces.flatMap { s -> s.layers.map { it.material } } }.distinctBy { it.code }.forEach {
-            materialIds[it.code] = materials.idFor(it)
+            materialIds[it.code] = if (fromBackup) materials.idForImported(it) else materials.idFor(it)
         }
         return db.withTransaction {
             val settingsJson = json.encodeToString(StudySettings.serializer(), settings)
             val bId = buildingDao.insert(building.copy(name = building.name + nameSuffix).toEntity(settingsJson))
             val roomIds = mutableMapOf<Long, Long>()
+            val surfaceIds = mutableMapOf<Long, Long>()
+            val openingIds = mutableMapOf<Long, Long>()
             building.rooms.forEachIndexed { i, r -> roomIds[r.id] = roomDao.insert(r.toEntity(bId, i)) }
             building.rooms.forEach { r ->
                 val newRoomId = roomIds.getValue(r.id)
                 r.surfaces.forEachIndexed { i, s ->
                     val sid = surfaceDao.insert(s.toEntity(newRoomId, i, s.adjacentRoomId?.let { roomIds[it] }))
+                    surfaceIds[s.id] = sid
                     surfaceDao.insertLayers(s.layers.mapIndexed { k, l ->
                         LayerEntity(surfaceId = sid, position = k, materialId = materialIds.getValue(l.material.code),
                             thicknessM = l.thicknessM, lambdaOverride = l.lambdaOverride, origin = l.origin)
                     })
-                    s.openings.forEach { surfaceDao.insertOpening(it.toEntity(sid)) }
+                    s.openings.forEach { o -> openingIds[o.id] = surfaceDao.insertOpening(o.toEntity(sid)) }
                 }
                 r.thermalBridges.forEach { bridgeDao.insert(ThermalBridgeEntity(roomId = newRoomId, label = it.label, lengthM = it.lengthM, psi = it.psi, origin = it.origin)) }
             }
             val radiatorIds = mutableMapOf<Long, Long>()
             building.radiators.forEach { r -> radiatorIds[r.id] = radiatorDao.insert(r.toEntity(bId, r.roomId?.let { roomIds[it] })) }
-            scenarios.forEach { saveScenario(bId, it) }
+            // Les modifications désignent pièces, parois, baies et radiateurs par identifiant : elles suivent la renumérotation.
+            scenarios.forEach { sc ->
+                val mods = sc.modifications.mapNotNull { remapModification(it, roomIds, surfaceIds, openingIds, radiatorIds) }
+                val dropped = sc.modifications.size - mods.size
+                saveScenario(bId, sc.copy(id = 0, modifications = mods,
+                    description = if (dropped > 0) "${sc.description} [Import : $dropped modification(s) sans cible retirée(s)]".trim() else sc.description))
+            }
             measurements.forEach { m ->
                 saveMeasurements(MeasurementSeriesEntity(buildingId = bId, name = m.name, roomId = m.roomId?.let { roomIds[it] },
                     outdoorC = m.outdoorC, startClockHour = m.startClockHour), m.points)
@@ -544,4 +564,33 @@ class ProjectRepository @Inject constructor(
 
     suspend fun measurementsOf(buildingId: Long): List<MeasurementSeries> =
         observeMeasurements(buildingId).first().map { (e, pts) -> MeasurementSeries(e.name, e.roomId, e.outdoorC, e.startClockHour, pts) }
+
+    /**
+     * Réécrit les identifiants d'une modification de scénario après import. Une liste vide signifie « tout »
+     * et reste vide ; une modification dont la cible a disparu est abandonnée (null) plutôt que de viser
+     * « tout » ou un autre élément.
+     */
+    private fun remapModification(
+        m: Modification,
+        rooms: Map<Long, Long>,
+        surfaces: Map<Long, Long>,
+        openings: Map<Long, Long>,
+        radiators: Map<Long, Long>,
+    ): Modification? {
+        fun List<Long>.remapAll(map: Map<Long, Long>): List<Long>? = if (isEmpty()) this else mapNotNull { map[it] }.takeIf { it.isNotEmpty() }
+        return when (m) {
+            is Modification.ReplaceRadiator -> radiators[m.radiatorId]?.let { nid ->
+                m.copy(radiatorId = nid, replacement = m.replacement.copy(roomId = m.replacement.roomId?.let { rooms[it] }))
+            }
+            is Modification.AddRadiator -> {
+                val old = m.radiator.roomId
+                if (old == null) m else rooms[old]?.let { m.copy(radiator = m.radiator.copy(roomId = it)) }
+            }
+            is Modification.ChangeSetpoint -> m.roomIds.remapAll(rooms)?.let { m.copy(roomIds = it) }
+            is Modification.AddInsulation -> m.surfaceIds.remapAll(surfaces)?.let { m.copy(surfaceIds = it) }
+            is Modification.ReplaceWindows -> m.openingIds.remapAll(openings)?.let { m.copy(openingIds = it) }
+            is Modification.ReplaceDoors -> m.openingIds.remapAll(openings)?.let { m.copy(openingIds = it) }
+            else -> m
+        }
+    }
 }

@@ -88,7 +88,7 @@ object CoverageAnalyzer {
     ): BuildingCoverage {
         val rooms = heatLoss.rooms.map { rl ->
             val inRoom = radiators.filter { it.roomId == rl.roomId }
-            val validated = inRoom.filter { it.validated }
+            val validated = inRoom.filter { RadiatorPower.countsInStudy(it) }
             val outputs = validated.map { outputFor(it, regime.supplyC, mode, rl.setpointC) }
             roomCoverage(rl, outputs, inRoom.size - validated.size)
         }
@@ -159,7 +159,7 @@ object SupplyTemperatureSolver {
         radiators: List<Radiator> = building.radiators,
     ): BuildingSupplyRequirement {
         val reqs = heatLoss.rooms.map { rl ->
-            val emitters = radiators.filter { it.roomId == rl.roomId && it.validated }
+            val emitters = radiators.filter { it.roomId == rl.roomId && RadiatorPower.countsInStudy(it) }
             val need = rl.totalW * loadFactor
             val t = if (emitters.isEmpty()) null else minimumSupply(emitters, need, rl.setpointC, mode, conservative)
             RoomSupplyRequirement(rl.roomId, rl.roomName, t, emitters.isNotEmpty())
