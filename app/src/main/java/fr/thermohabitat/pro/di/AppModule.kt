@@ -12,7 +12,16 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import fr.thermohabitat.pro.data.db.AppDatabase
 import fr.thermohabitat.thermal.StudyAnalyzer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import javax.inject.Qualifier
 import javax.inject.Singleton
+
+/** Portée de coroutines de l'application (survit aux écrans, ex. sauvegarde finale d'un formulaire). */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class ApplicationScope
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "reglages")
 
@@ -32,6 +41,11 @@ object AppModule {
     @Provides
     @Singleton
     fun provideStudyAnalyzer(): StudyAnalyzer = StudyAnalyzer()
+
+    @Provides
+    @Singleton
+    @ApplicationScope
+    fun provideApplicationScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @Provides fun buildingDao(db: AppDatabase) = db.buildingDao()
     @Provides fun roomDao(db: AppDatabase) = db.roomDao()

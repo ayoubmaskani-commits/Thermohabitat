@@ -4,57 +4,48 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
+import androidx.activity.viewModels
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
-import fr.thermohabitat.pro.data.db.BuildingDao
+import fr.thermohabitat.pro.data.repository.AppPreferences
+import fr.thermohabitat.pro.data.repository.MaterialRepository
+import fr.thermohabitat.pro.data.repository.SettingsRepository
+import fr.thermohabitat.pro.ui.navigation.AppNavHost
+import fr.thermohabitat.pro.ui.theme.ThermoHabitatTheme
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.serialization.Serializable
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-@Serializable
-data object ProbeRoute
-
 @HiltViewModel
-class ProbeViewModel @Inject constructor(buildingDao: BuildingDao) : ViewModel() {
-    val count = buildingDao.observeAll().map { it.size }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+class MainViewModel @Inject constructor(
+    settings: SettingsRepository,
+    materials: MaterialRepository,
+) : ViewModel() {
+    val preferences = settings.preferences.stateIn(viewModelScope, SharingStarted.Eagerly, AppPreferences())
+
+    init {
+        // Initialisation de la bibliothèque de matériaux intégrée (hors ligne).
+        viewModelScope.launch { materials.ensureSeeded() }
+    }
 }
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: MainViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                val nav = rememberNavController()
-                NavHost(nav, startDestination = ProbeRoute) {
-                    composable<ProbeRoute> {
-                        val vm: ProbeViewModel = hiltViewModel()
-                        val count by vm.count.collectAsStateWithLifecycle()
-                        Scaffold { padding ->
-                            Box(Modifier.fillMaxSize().padding(padding)) {
-                                Text("ThermoHabitat Pro – $count projet(s)")
-                            }
-                        }
-                    }
-                }
+            val prefs by viewModel.preferences.collectAsStateWithLifecycle()
+            ThermoHabitatTheme(themeMode = prefs.themeMode, dynamicColor = prefs.dynamicColor) {
+                AppNavHost()
             }
         }
     }
