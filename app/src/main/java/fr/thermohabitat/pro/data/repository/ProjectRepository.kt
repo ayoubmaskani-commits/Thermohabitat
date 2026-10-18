@@ -449,6 +449,10 @@ class ProjectRepository @Inject constructor(
         }
     }
 
+    fun observeScenario(id: Long): Flow<Pair<ScenarioEntity, Scenario>?> = scenarioDao.observe(id).map { e ->
+        e?.let { runCatching { it to json.decodeFromString(Scenario.serializer(), it.json) }.getOrNull() }
+    }
+
     suspend fun deleteScenario(id: Long) = scenarioDao.delete(id)
 
     private val pointsSerializer = ListSerializer(MeasuredPoint.serializer())

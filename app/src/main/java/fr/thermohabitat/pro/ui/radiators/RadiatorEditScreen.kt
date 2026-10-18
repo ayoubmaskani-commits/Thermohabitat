@@ -16,7 +16,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DocumentScanner
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.ViewColumn
@@ -339,7 +339,7 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                         "Identifiez le radiateur avec la bibliothèque illustrée ; le comptage des éléments et la lecture de plaque restent disponibles.",
                         kind = BannerKind.WARNING)
                 }
-                Button(onClick = { nav.navigate(RadiatorLibraryRoute(r.id)) }) { Icon(Icons.Filled.MenuBook, null); Text("  Bibliothèque illustrée") }
+                Button(onClick = { nav.navigate(RadiatorLibraryRoute(r.id)) }) { Icon(Icons.AutoMirrored.Filled.MenuBook, null); Text("  Bibliothèque illustrée") }
                 RadiatorLibrary.find(r.categoryCode)?.let { cat ->
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         RadiatorIllustration(cat)

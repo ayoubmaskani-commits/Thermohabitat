@@ -13,7 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Euro
 import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -78,7 +78,7 @@ fun SimulationsScreen(nav: NavController, vm: SimulationsViewModel = hiltViewMod
                 "Loi d'eau paramétrable, données constructeur (puissance, COP), point de bivalence, SCOP estimé.") { nav.navigate(HeatPumpRoute) }
             ToolCard(Icons.Filled.AcUnit, "Refroidissement et inertie",
                 "Simulation dynamique RC : coupure du chauffage, comparaison avant/après, calage sur mesures.") { nav.navigate(CoolingRoute) }
-            ToolCard(Icons.Filled.ShowChart, "Scénarios d'amélioration",
+            ToolCard(Icons.AutoMirrored.Filled.ShowChart, "Scénarios d'amélioration",
                 "Isolation, fenêtres, combles, plancher, radiateurs, basse température : comparateur avant/après.") { nav.navigate(ScenariosRoute) }
             ToolCard(Icons.Filled.Euro, "Consommations et coûts",
                 "Degrés-jours, rendements, prix de l'énergie : fioul, gaz, électricité, PAC, bois.") { nav.navigate(EnergyRoute) }

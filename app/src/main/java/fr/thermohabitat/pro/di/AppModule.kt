@@ -57,3 +57,12 @@ object AppModule {
     @Provides fun scenarioDao(db: AppDatabase) = db.scenarioDao()
     @Provides fun measurementDao(db: AppDatabase) = db.measurementDao()
 }
+
+/** Liaison de l'interface de reconnaissance à l'implémentation TensorFlow Lite (inactive sans modèle installé). */
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RecognitionModule {
+    @dagger.Binds
+    @Singleton
+    abstract fun bindClassifier(impl: fr.thermohabitat.pro.recognition.TfLiteRadiatorClassifier): fr.thermohabitat.pro.recognition.RadiatorClassifier
+}
