@@ -10,8 +10,6 @@ import fr.thermohabitat.pro.ui.components.ScrollColumn
 @Composable private fun Pending(nav: NavController, title: String, tab: Boolean = false) =
     ScreenScaffold(title, onBack = if (tab) null else ({ nav.popBackStack() }), isTab = tab) { p -> ScrollColumn(p) { Text(title) } }
 
-@Composable fun SimulationsScreen(nav: NavController) = Pending(nav, "Simulations", true)
-@Composable fun ComparisonScreen(nav: NavController) = Pending(nav, "Comparaison")
 @Composable fun HeatPumpScreen(nav: NavController) = Pending(nav, "Pompe à chaleur")
 @Composable fun CoolingScreen(nav: NavController) = Pending(nav, "Refroidissement")
 @Composable fun ScenariosScreen(nav: NavController) = Pending(nav, "Scénarios")
