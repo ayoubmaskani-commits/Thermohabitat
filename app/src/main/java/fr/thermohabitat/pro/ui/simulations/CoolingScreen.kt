@@ -264,7 +264,8 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                 series += LineSeries("Extérieur", sim.timesH, sim.outdoorC, MaterialTheme.colorScheme.outline, dashed = true)
                 if (measurements.isNotEmpty()) series += LineSeries("Mesures", measurements.map { it.timeH }, measurements.map { it.tempC }, ChartPalette[4], pointsOnly = true)
                 calibration?.let { c ->
-                    val z = if (o.multizone && o.roomId != null) c.calibrated.zone(o.roomId) else c.calibrated.zones.firstOrNull()
+                    val rid = o.roomId
+                    val z = if (o.multizone && rid != null) c.calibrated.zone(rid) else c.calibrated.zones.firstOrNull()
                     z?.let { series += LineSeries("Modèle calé", c.calibrated.timesH, it.airTempC, ChartPalette[2]) }
                 }
                 LineChart(series, xLabel = label, height = 280.dp)
