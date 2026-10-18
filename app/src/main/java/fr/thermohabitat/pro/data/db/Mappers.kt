@@ -100,6 +100,7 @@ fun RadiatorEntity.toModel(photos: List<PhotoEntity> = emptyList()) = Radiator(
     exponentOrigin = exponentOrigin, documentedUncertaintyPct = documentedUncertaintyPct,
     identificationMethod = identificationMethod, identificationConfidence = identificationConfidence,
     validated = validated, flowKgH = flowKgH,
+    categoryCode = categoryCode, aiSuggestion = aiSuggestion, validatedAt = validatedAt,
     photos = photos.map { PhotoRef(it.id, it.fileName, it.kind, it.caption) }, notes = notes,
 )
 
@@ -111,8 +112,8 @@ fun Radiator.toEntity(buildingId: Long, roomIdMapped: Long?) = RadiatorEntity(
     ratingSupplyC = rating.supplyC, ratingReturnC = rating.returnC, ratingAmbientC = rating.ambientC,
     exponent = exponent, exponentOrigin = exponentOrigin, documentedUncertaintyPct = documentedUncertaintyPct,
     identificationMethod = identificationMethod, identificationConfidence = identificationConfidence,
-    validated = validated, validatedAt = if (validated) System.currentTimeMillis() else null, flowKgH = flowKgH,
-    notes = notes,
+    validated = validated, validatedAt = if (validated) (validatedAt ?: System.currentTimeMillis()) else null, flowKgH = flowKgH,
+    categoryCode = categoryCode, aiSuggestion = aiSuggestion, notes = notes,
 )
 
 fun BuildingEntity.climate() = Climate(

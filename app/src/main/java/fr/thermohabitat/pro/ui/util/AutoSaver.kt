@@ -2,6 +2,7 @@ package fr.thermohabitat.pro.ui.util
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filterNotNull
@@ -20,6 +21,7 @@ class AutoSaver<T : Any>(
 ) {
     private val pending = MutableStateFlow<T?>(null)
     @Volatile private var lastSaved: T? = null
+    @Volatile private var inFlight: Job? = null
 
     init {
         scope.launch {
@@ -34,6 +36,16 @@ class AutoSaver<T : Any>(
     /** Écrit immédiatement la dernière valeur non sauvegardée (à appeler dans onCleared). */
     fun flush() {
         val v = pending.value ?: return
-        if (v != lastSaved) { lastSaved = v; appScope.launch { save(v) } }
+        if (v != lastSaved) { lastSaved = v; inFlight = appScope.launch { save(v) } }
+    }
+
+    /**
+     * Comme [flush], mais attend que l'écriture soit faite : à appeler avant une opération qui relit la base
+     * (duplication, ajout de parois, application d'un modèle).
+     */
+    suspend fun flushNow() {
+        inFlight?.join()
+        val v = pending.value ?: return
+        if (v != lastSaved) { lastSaved = v; save(v) }
     }
 }

@@ -57,7 +57,7 @@ data class BarEntry(val label: String, val value: Double, val color: Color? = nu
 /** Diagramme en barres horizontales interactif (toucher une barre affiche son détail). */
 @Composable
 fun HorizontalBarChart(entries: List<BarEntry>, modifier: Modifier = Modifier, valueFormatter: (Double) -> String = { Fmt.watts(it) }) {
-    var selected by remember { mutableStateOf<Int?>(null) }
+    var selected by remember(entries) { mutableStateOf<Int?>(null) }
     val maxValue = entries.maxOfOrNull { abs(it.value) }?.takeIf { it > 0 } ?: 1.0
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         entries.forEachIndexed { i, e ->
@@ -130,7 +130,8 @@ data class DonutSlice(val label: String, val value: Double, val color: Color)
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DonutChart(slices: List<DonutSlice>, modifier: Modifier = Modifier, centerLabel: String? = null) {
-    var selected by remember { mutableStateOf<Int?>(null) }
+    // Sélection remise à zéro quand les secteurs changent (autre projet, nombre de catégories différent).
+    var selected by remember(slices) { mutableStateOf<Int?>(null) }
     val total = slices.sumOf { max(it.value, 0.0) }.takeIf { it > 0 } ?: 1.0
     val textMeasurer = rememberTextMeasurer()
     val onSurface = MaterialTheme.colorScheme.onSurface
@@ -146,7 +147,7 @@ fun DonutChart(slices: List<DonutSlice>, modifier: Modifier = Modifier, centerLa
                 drawArc(s.color.copy(alpha = alpha), start, sweep, false, topLeft, Size(diameter, diameter), style = Stroke(stroke))
                 start += sweep
             }
-            val label = selected?.let { "${Fmt.pct(slices[it].value / total)}" } ?: centerLabel
+            val label = selected?.let { i -> slices.getOrNull(i)?.let { Fmt.pct(it.value / total) } } ?: centerLabel
             if (label != null) {
                 val layout = textMeasurer.measure(label, TextStyle(fontSize = 18.sp, fontWeight = FontWeight.Bold, color = onSurface))
                 drawText(layout, topLeft = Offset((size.width - layout.size.width) / 2, (size.height - layout.size.height) / 2))

@@ -33,6 +33,23 @@ object ZoneModelBuilder {
     /** Coefficient d'échange masse-air de l'EN ISO 13790, W/(m²·K). */
     const val H_MS_PER_M2 = 9.1
 
+    /** Répartition du chemin opaque : H_em vers l'extérieur et vers le sol, excédent reporté sur l'air. */
+    private class MassSplit(val hemOutdoor: Double, val hemGround: Double, val extraAir: Double)
+
+    /** Conductances brutes d'une pièce avant répartition (pour l'agrégation monozone). */
+    private class RawConductances(val hAirOutdoor: Double, val hOpaque: Double, val hGround: Double)
+
+    /**
+     * H_em tel que série(H_ms ; H_em) = H_opaque + H_sol, réparti entre extérieur et sol au prorata ;
+     * au-delà de 0,95·H_ms, l'excédent passe directement par le nœud d'air pour conserver le H total.
+     */
+    private fun splitMass(hOpaque: Double, hGround: Double, hms: Double): MassSplit {
+        val total = hOpaque + hGround
+        if (total <= 0.0) return MassSplit(0.0, 0.0, 0.0)
+        val (hem, extraAir) = if (total < 0.95 * hms) 1.0 / (1.0 / total - 1.0 / hms) to 0.0 else 19.0 * hms to (total - 0.95 * hms)
+        return MassSplit(hem * hOpaque / total, hem * hGround / total, extraAir)
+    }
+
     fun build(
         building: Building,
         heatLoss: BuildingHeatLoss = HeatLossCalculator().calculate(building),
@@ -42,12 +59,20 @@ object ZoneModelBuilder {
     ): ZoneModel {
         val notes = mutableListOf<String>()
         val zones = mutableListOf<ThermalZone>()
-        val couplingMap = mutableMapOf<Pair<Long, Long>, Double>()
+        val raw = mutableListOf<RawConductances>()
+        // Échanges entre pièces : somme par pièce déclarante (paroi + portes, plusieurs parois), puis
+        // dédoublonnage entre les deux côtés d'une même paroi saisie dans chacune des pièces.
+        val sideSums = mutableMapOf<Triple<Long, Long, Long>, Double>()
         val roomIds = building.rooms.map { it.id }.toSet()
+        // Non-simultanéité des infiltrations (0,5·Σq_inf au niveau du bâtiment) : les débits de dimensionnement
+        // des pièces surestiment le renouvellement d'air réel ; on les ramène au débit du bâtiment.
+        val roomVentilation = heatLoss.rooms.sumOf { it.ventilationHWk }
+        val ventilationScale = if (roomVentilation > 0) (heatLoss.ventilationHWk / roomVentilation).coerceIn(0.0, 1.0) else 1.0
+        if (ventilationScale < 0.99) notes += "Infiltrations ramenées au débit du bâtiment (non-simultanéité entre pièces)."
 
         for (room in building.rooms) {
             val rl = heatLoss.room(room.id) ?: continue
-            var hAirOut = rl.ventilationHWk
+            var hAirOut = rl.ventilationHWk * ventilationScale
             var hOpaque = 0.0
             var hGround = 0.0
             var hFixed = 0.0
@@ -62,8 +87,8 @@ object ZoneModelBuilder {
                         val h = e.areaM2 * e.uValue
                         val adj = surface?.adjacentRoomId
                         if (surface?.boundary == Boundary.HEATED_ROOM && adj != null && adj in roomIds && adj != room.id) {
-                            val key = if (room.id < adj) room.id to adj else adj to room.id
-                            couplingMap[key] = maxOf(couplingMap[key] ?: 0.0, h)
+                            val side = if (room.id < adj) Triple(room.id, room.id, adj) else Triple(room.id, adj, room.id)
+                            sideSums[side] = (sideSums[side] ?: 0.0) + h
                         } else {
                             val t = surface?.adjacentTemperatureC
                                 ?: if (surface?.boundary == Boundary.ADJACENT_BUILDING) HeatLossCalculator.DEFAULT_ADJACENT_BUILDING_C
@@ -75,13 +100,9 @@ object ZoneModelBuilder {
                 }
             }
             val cap = ThermalInertia.roomCapacity(building, room)
-            val hms = H_MS_PER_M2 * cap.effectiveMassAreaM2
-            val hm = hOpaque
-            val hem = when {
-                hm <= 0 -> 0.0
-                hm < 0.95 * hms -> 1.0 / (1.0 / hm - 1.0 / hms)
-                else -> hm * 20.0
-            }
+            val hms = (H_MS_PER_M2 * cap.effectiveMassAreaM2).coerceAtLeast(1.0)
+            val split = splitMass(hOpaque, hGround, hms)
+            raw += RawConductances(hAirOut, hOpaque, hGround)
             val apertures = mutableMapOf<Orientation, Double>()
             room.surfaces.filter { it.boundary == Boundary.EXTERIOR }.forEach { s ->
                 val o = s.orientation ?: return@forEach
@@ -93,10 +114,10 @@ object ZoneModelBuilder {
                 name = room.name,
                 airCapacityJk = cap.airJk,
                 massCapacityJk = cap.massJk.coerceAtLeast(1.0),
-                hAirOutdoorWk = hAirOut,
-                hAirMassWk = hms.coerceAtLeast(1.0),
-                hMassOutdoorWk = hem,
-                hMassGroundWk = hGround,
+                hAirOutdoorWk = hAirOut + split.extraAir,
+                hAirMassWk = hms,
+                hMassOutdoorWk = split.hemOutdoor,
+                hMassGroundWk = split.hemGround,
                 hAirFixedWk = hFixed,
                 fixedTempC = if (hFixed > 0) fixedWeighted / hFixed else building.setpointC,
                 setpointC = room.setpointC,
@@ -105,6 +126,11 @@ object ZoneModelBuilder {
                 solarApertures = apertures,
                 floorAreaM2 = room.floorAreaM2,
             )
+        }
+        val couplingMap = mutableMapOf<Pair<Long, Long>, Double>()
+        sideSums.forEach { (k, h) ->
+            val key = k.second to k.third
+            couplingMap[key] = maxOf(couplingMap[key] ?: 0.0, h)
         }
         val couplings = couplingMap.map { (k, h) -> ZoneCoupling(k.first, k.second, h) }
 
@@ -123,8 +149,11 @@ object ZoneModelBuilder {
 
         if (!singleZone) return ZoneModel(zones, couplings, capU, condU, notes)
 
-        // Agrégation monozone de la maison entière.
+        // Agrégation monozone de la maison entière : la répartition masse/extérieur/sol est refaite sur les
+        // conductances totales (sommer des H_em par pièce surestimerait le H opaque en série avec ΣH_ms).
         val hFixedTotal = zones.sumOf { it.hAirFixedWk }
+        val hmsTotal = zones.sumOf { it.hAirMassWk }
+        val aggregate = splitMass(raw.sumOf { it.hOpaque }, raw.sumOf { it.hGround }, hmsTotal)
         val area = zones.sumOf { it.floorAreaM2 }.coerceAtLeast(1e-9)
         val apertures = mutableMapOf<Orientation, Double>()
         zones.forEach { z -> z.solarApertures.forEach { (o, a) -> apertures[o] = (apertures[o] ?: 0.0) + a } }
@@ -133,10 +162,10 @@ object ZoneModelBuilder {
             name = "Maison entière",
             airCapacityJk = zones.sumOf { it.airCapacityJk },
             massCapacityJk = zones.sumOf { it.massCapacityJk },
-            hAirOutdoorWk = zones.sumOf { it.hAirOutdoorWk },
-            hAirMassWk = zones.sumOf { it.hAirMassWk },
-            hMassOutdoorWk = zones.sumOf { it.hMassOutdoorWk },
-            hMassGroundWk = zones.sumOf { it.hMassGroundWk },
+            hAirOutdoorWk = raw.sumOf { it.hAirOutdoor } + aggregate.extraAir,
+            hAirMassWk = hmsTotal,
+            hMassOutdoorWk = aggregate.hemOutdoor,
+            hMassGroundWk = aggregate.hemGround,
             hAirFixedWk = hFixedTotal,
             fixedTempC = if (hFixedTotal > 0) zones.sumOf { it.hAirFixedWk * it.fixedTempC } / hFixedTotal else building.setpointC,
             setpointC = zones.sumOf { it.setpointC * it.floorAreaM2 } / area,

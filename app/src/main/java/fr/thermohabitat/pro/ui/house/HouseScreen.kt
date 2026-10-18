@@ -214,7 +214,7 @@ private fun AddRoomDialog(defaultFloor: Int, onDismiss: () -> Unit, onCreate: (S
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextInput("Nom", name, { name = it })
                 DropdownField("Usage", RoomUsage.entries, usage, { it.label }, { usage = it; if (name.isBlank()) name = it.label })
-                IntField("Niveau (0 = rez-de-chaussée)", floor, { floor = it ?: 0 }, min = -3, max = 20)
+                IntField("Niveau (0 = rez-de-chaussée)", floor, { v -> v?.let { floor = it } }, min = -3, max = 20, nullable = false)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     NumberField("Longueur", length, { length = it }, Modifier.weight(1f), unit = "m", min = 0.3, max = 100.0)
                     NumberField("Largeur", width, { width = it }, Modifier.weight(1f), unit = "m", min = 0.3, max = 100.0)

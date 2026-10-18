@@ -179,7 +179,7 @@ class RepositoryTest {
     }
 
     @Test
-    fun `import : les scenarios suivent la renumerotation des pieces et radiateurs`() = runBlocking {
+    fun `import - les scenarios suivent la renumerotation des pieces et radiateurs`() = runBlocking {
         repo.insertGraph(SampleProjects.pise1870(), StudySettings()) // décale les identifiants du projet suivant
         val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
         val p = repo.loadProject(id)!!
@@ -214,7 +214,7 @@ class RepositoryTest {
     }
 
     @Test
-    fun `import : les materiaux gardent les valeurs de la sauvegarde`() = runBlocking {
+    fun `import - les materiaux gardent les valeurs de la sauvegarde`() = runBlocking {
         val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
         val p = repo.loadProject(id)!!
         val backup = BackupManager(context, repo, photos)
@@ -231,7 +231,7 @@ class RepositoryTest {
     }
 
     @Test
-    fun `suppression d'un projet : les exports generes sont effaces`() = runBlocking {
+    fun `suppression d'un projet - les exports generes sont effaces`() = runBlocking {
         val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
         val zip = BackupManager(context, repo, photos).zipToCache(id, "Exemple")
         assertThat(zip.exists()).isTrue()

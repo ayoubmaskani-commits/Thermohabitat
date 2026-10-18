@@ -76,11 +76,15 @@ object ElementCounter {
         val maxPeriod = (w.toDouble() / minElements).coerceAtMost(w / 2.0)
         if (maxPeriod <= minPeriod) return ElementCountResult(null, null, 0.0, emptyList(), "Plage de recherche invalide.")
 
-        val ac = autocorrelation(detrended, maxPeriod.toInt() + 2)
+        // Le pic discret peut dépasser w/minElements (arrondi du pic, recadrage un peu serré) : marge de 15 %,
+        // bornée pour que round(w / période) reste ≥ minElements.
+        val searchMax = minOf(maxPeriod * 1.15, w / (minElements - 0.5), w / 2.0)
+
+        val ac = autocorrelation(detrended, searchMax.toInt() + 2)
         if (ac[0] <= 1e-9) return ElementCountResult(null, null, 0.0, emptyList(), "Image uniforme : aucun motif détecté.")
 
         // Pics locaux de l'autocorrélation dans la plage de périodes admissible.
-        val peaks = (minPeriod.toInt().coerceAtLeast(2) until minOf(ac.size - 1, maxPeriod.toInt() + 1))
+        val peaks = (minPeriod.toInt().coerceAtLeast(2) until minOf(ac.size - 1, searchMax.toInt() + 1))
             .filter { l -> ac[l] > ac[l - 1] && ac[l] >= ac[l + 1] && ac[l] > 0 }
         if (peaks.isEmpty()) return ElementCountResult(null, null, 0.0, emptyList(), "Aucune périodicité nette.")
         val best = peaks.maxBy { ac[it] }

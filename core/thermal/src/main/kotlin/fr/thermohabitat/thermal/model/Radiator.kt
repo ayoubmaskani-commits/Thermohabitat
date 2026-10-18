@@ -76,6 +76,12 @@ data class Radiator(
     val validated: Boolean = false,
     /** Débit d'eau de l'émetteur s'il est connu (équilibrage), kg/h. */
     val flowKgH: Double? = null,
+    /** Catégorie de la bibliothèque illustrée retenue, le cas échéant. */
+    val categoryCode: String? = null,
+    /** Proposition d'un modèle de reconnaissance (si installé), conservée pour traçabilité. */
+    val aiSuggestion: String? = null,
+    /** Date de validation par l'utilisateur (ms depuis 1970). */
+    val validatedAt: Long? = null,
     val photos: List<PhotoRef> = emptyList(),
     val notes: String = "",
 ) {

@@ -137,7 +137,7 @@ class SurfaceEditViewModel @Inject constructor(
     }
 
     fun applyTemplate(code: String) = viewModelScope.launch {
-        saver.flush()
+        saver.flushNow()
         repository.applyTemplate(surfaceId, code)
         _form.value = repository.getSurface(surfaceId)
     }
@@ -383,7 +383,7 @@ private fun OpeningEditor(o: OpeningEntity, vm: SurfaceEditViewModel) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberField("Largeur", o.widthM, { v -> v?.let { vm.updateOpening(o.copy(widthM = it)) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.05, max = 20.0)
                 NumberField("Hauteur", o.heightM, { v -> v?.let { vm.updateOpening(o.copy(heightM = it)) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.05, max = 10.0)
-                IntField("Nombre", o.count, { v -> vm.updateOpening(o.copy(count = (v ?: 1).coerceAtLeast(1))) }, Modifier.weight(0.8f), min = 1, max = 50)
+                IntField("Nombre", o.count, { v -> v?.let { vm.updateOpening(o.copy(count = it.coerceAtLeast(1))) } }, Modifier.weight(0.8f), min = 1, max = 50, nullable = false)
             }
             val presets = if (o.kind == OpeningKind.DOOR) OpeningPresets.doors else OpeningPresets.windows
             DropdownField("Type (valeur indicative)", presets, OpeningPresets.find(o.presetCode), { "${it.label} – U ≈ ${Fmt.num(it.uValue, 1)}" },

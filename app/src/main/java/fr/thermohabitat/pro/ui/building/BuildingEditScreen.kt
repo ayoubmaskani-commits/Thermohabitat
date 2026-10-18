@@ -144,7 +144,7 @@ fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewM
                 TextInput("Commune", b.commune, { v -> vm.update { it.copy(commune = v) } })
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     IntField("Année de construction", b.constructionYear, { v -> vm.update { it.copy(constructionYear = v) } }, Modifier.weight(1f), min = 1000, max = 2100)
-                    IntField("Nombre d'étages", b.floorsCount, { v -> vm.update { it.copy(floorsCount = v ?: 1) } }, Modifier.weight(1f), min = 1, max = 20)
+                    IntField("Nombre d'étages", b.floorsCount, { v -> v?.let { n -> vm.update { it.copy(floorsCount = n) } } }, Modifier.weight(1f), min = 1, max = 20, nullable = false)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     NumberField("Surface habitable déclarée", b.declaredLivingAreaM2, { v -> vm.update { it.copy(declaredLivingAreaM2 = v) } },
@@ -223,7 +223,14 @@ fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewM
 
             TextInput("Notes", b.notes, { v -> vm.update { it.copy(notes = v) } }, singleLine = false)
 
-            Button(onClick = { nav.navigateToTab(HouseRoute) }) {
+            Button(onClick = {
+                // Ouvert depuis l'onglet Maison : un simple retour suffit. Ouvert depuis l'Accueil : l'écran est retiré
+                // de la pile SANS être sauvegardé (sinon un formulaire périmé réapparaîtrait dans l'onglet Accueil).
+                if (!nav.popBackStack<HouseRoute>(inclusive = false)) {
+                    nav.popBackStack()
+                    nav.navigateToTab(HouseRoute)
+                }
+            }) {
                 Text("Continuer : saisir les pièces")
             }
         }

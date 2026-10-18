@@ -111,10 +111,12 @@ fun IntField(
     supportingText: String? = null,
     min: Int = 0,
     max: Int = 10_000,
+    /** Faux : un champ effacé n'est pas transmis (aucune valeur de repli réécrite pendant la saisie). */
+    nullable: Boolean = true,
 ) {
     NumberField(
         label = label, value = value?.toDouble(), onValueChange = { onValueChange(it?.toInt()) },
-        modifier = modifier, decimals = 0, supportingText = supportingText, min = min.toDouble(), max = max.toDouble(),
+        modifier = modifier, decimals = 0, nullable = nullable, supportingText = supportingText, min = min.toDouble(), max = max.toDouble(),
     )
 }
 

@@ -1,6 +1,7 @@
 package fr.thermohabitat.pro.data.export
 
 import fr.thermohabitat.thermal.StudyResult
+import fr.thermohabitat.thermal.calc.CoverageAnalyzer
 import fr.thermohabitat.thermal.calc.RadiatorPower
 import java.util.Locale
 
@@ -26,7 +27,8 @@ object CsvExporter {
         b.radiators.forEach { r ->
             val nominal = RadiatorPower.resolveNominal(r)
             val room = b.room(r.roomId)
-            val out = RadiatorPower.outputOf(r, regime.supplyC, regime.returnC ?: (regime.supplyC - 10), room?.setpointC ?: 20.0)
+            // Même mode hydraulique que la couverture des pièces (ΔT constant ou débit nominal conservé).
+            val out = CoverageAnalyzer.outputFor(r, regime.supplyC, regime.mode, room?.setpointC ?: 20.0)
             sb.appendLine(line(
                 r.code, r.label, room?.name ?: "", r.type.label, r.material.label, r.sections?.toString() ?: "", r.columns?.toString() ?: "",
                 n(r.heightMm), n(r.lengthMm), n(r.depthMm), r.manufacturer, r.model, r.reference, n(r.nominalPowerW), r.nominalPowerOrigin.label,

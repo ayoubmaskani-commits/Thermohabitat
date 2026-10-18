@@ -37,14 +37,27 @@ object NameplateParser {
         "Saint-Roch", "Sofath", "Caleido", "Cordivari", "Irsap", "Tubes Radiatori",
     )
 
-    private val powerRegex = Regex("""(\d{2,5}(?:[.,]\d{1,2})?)\s*(kcal\s*/?\s*h|kcal|kw|w(?:att)?s?)\b""", RegexOption.IGNORE_CASE)
+    /**
+     * Puissance : « 1 500 W » ou « 1.500 W » (séparateur de milliers, espaces insécables compris), « 1650,5 W »,
+     * « 1,5 kW », « 1 290 kcal/h ». Le nombre ne peut pas commencer au milieu d'un autre (« 1,12 kW » ≠ 12 kW).
+     */
+    private val powerRegex = Regex(
+        """(?<![\d.,])([1-9][ \u00A0\u202F.]\d{3}(?!\d)|\d{1,5})([.,]\d{1,2})?[\s\u00A0\u202F]*(kcal[\s\u00A0\u202F]*/?[\s\u00A0\u202F]*h|kcal|kw|w(?:att)?s?)\b""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val groupSeparatorRegex = Regex("""[ \u00A0\u202F.]""")
+    private val blankRegex = Regex("""[\s\u00A0\u202F]""")
     private val regimeRegex = Regex("""(\d{2})\s*/\s*(\d{2})\s*/\s*(\d{2})""")
     private val deltaTRegex = Regex("""(?:Δ\s*T|delta\s*T|dT|DT)\s*[=:]?\s*(\d{2})\s*K?""", RegexOption.IGNORE_CASE)
     private val dimsRegex = Regex("""(\d{3,4})\s*[x×*]\s*(\d{3,4})""")
     private val heightRegex = Regex("""\bH\s*[=:]?\s*(\d{3,4})\s*(?:mm)?\b""", RegexOption.IGNORE_CASE)
     private val lengthRegex = Regex("""\b(?:L|l)\s*[=:]?\s*(\d{3,4})\s*(?:mm)?\b""")
     private val panelRegex = Regex("""\b(?:type|typ|t)\s*[-:]?\s*(10|11|20|21|22|33)\b""", RegexOption.IGNORE_CASE)
-    private val refRegex = Regex("""\b(?:r[ée]f(?:[ée]rence)?|art(?:icle)?|n[°o]|code)\s*[.:]?\s*([A-Z0-9][A-Z0-9\-/.]{2,24})""", RegexOption.IGNORE_CASE)
+    /** Référence : le mot-clé doit être un mot entier (« nominale », « Norme », « Refroidissement » ne comptent pas). */
+    private val refRegex = Regex(
+        """\b(?:(?:r[ée]f(?:[ée]rence)?|art(?:icle)?|no|code)(?!\p{L})|n°)\s*[.:]?\s*([A-Z0-9][A-Z0-9\-/.]{2,24})""",
+        RegexOption.IGNORE_CASE,
+    )
     private val modelRegex = Regex("""\b(?:mod[èe]le|model)\s*[.:]?\s*([\p{L}0-9][\p{L}0-9 \-]{1,30})""", RegexOption.IGNORE_CASE)
 
     fun parse(text: String): NameplateData {
@@ -68,8 +81,9 @@ object NameplateParser {
 
     private fun findPower(text: String): ExtractedField<Double>? {
         val candidates = powerRegex.findAll(text).mapNotNull { m ->
-            val v = m.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return@mapNotNull null
-            val unit = m.groupValues[2].lowercase().replace(" ", "")
+            val integer = m.groupValues[1].replace(groupSeparatorRegex, "")
+            val v = (integer + m.groupValues[2].replace(',', '.')).toDoubleOrNull() ?: return@mapNotNull null
+            val unit = m.groupValues[3].lowercase().replace(blankRegex, "")
             val watts = when {
                 unit.startsWith("kcal") -> v * 1.163
                 unit == "kw" -> v * 1000.0

@@ -71,10 +71,13 @@ import fr.thermohabitat.pro.ui.navigation.BuildingEditRoute
 import fr.thermohabitat.pro.ui.navigation.CaptureRoute
 import fr.thermohabitat.pro.ui.navigation.HouseRoute
 import fr.thermohabitat.pro.ui.navigation.SettingsRoute
+import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.theme.LocalStatusColors
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.PacCompatibility
 import fr.thermohabitat.thermal.StudySettings
+import fr.thermohabitat.thermal.calc.BuildingCoverage
+import fr.thermohabitat.thermal.calc.CoverageAnalyzer
 import fr.thermohabitat.thermal.calc.CoverageStatus
 import fr.thermohabitat.thermal.library.SampleProjects
 import kotlinx.coroutines.flow.SharingStarted
@@ -161,7 +164,10 @@ fun HomeScreen(nav: NavController, vm: HomeViewModel = hiltViewModel()) {
                 )
             }
 
-            state.active?.let { ActiveProjectDashboard(it, onOpenHouse = { nav.navigate(HouseRoute) }) }
+            // Clé = projet : l'état local des graphiques (sélection) repart de zéro quand on change de projet.
+            state.active?.let { a ->
+                androidx.compose.runtime.key(a.project.id) { ActiveProjectDashboard(a, onOpenHouse = { nav.navigateToTab(HouseRoute) }) }
+            }
 
             if (state.projects.isNotEmpty()) {
                 Text("Projets enregistrés", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -204,17 +210,27 @@ fun HomeScreen(nav: NavController, vm: HomeViewModel = hiltViewModel()) {
     }
 }
 
+/**
+ * Même règle que le statut des pièces (CoverageAnalyzer) appliquée au bâtiment : vert seulement si la borne
+ * basse couvre chaque pièce, rouge si moins de 90 % des besoins sont couverts, orange sinon.
+ */
+@Composable
+private fun coverageColor(c: BuildingCoverage): androidx.compose.ui.graphics.Color {
+    val s = LocalStatusColors.current
+    if (c.totalNeedW <= 0.0) return s.neutral
+    return when {
+        c.rooms.all { it.status == CoverageStatus.SUFFICIENT || it.status == CoverageStatus.NO_NEED } -> s.sufficient
+        c.coveredFraction < CoverageAnalyzer.INSUFFICIENT_THRESHOLD -> s.insufficient
+        else -> s.limit
+    }
+}
+
 @Composable
 private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) {
     val r = p.result
     val hl = r.heatLoss
-    val status = LocalStatusColors.current
     val coverage = r.studyCoverage
-    val coverageColor = when {
-        coverage.coveredFraction >= 0.999 -> status.sufficient
-        coverage.coveredFraction >= 0.9 -> status.limit
-        else -> status.insufficient
-    }
+    val coverageColor = coverageColor(coverage)
     SectionCard(
         title = p.project.entity.name,
         subtitle = listOfNotNull(p.project.entity.commune.ifBlank { null }, p.project.entity.constructionYear?.let { "construit en $it" },
@@ -269,11 +285,7 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
         SectionCard("Couverture selon le régime d'eau", subtitle = "Part des besoins couverts par les radiateurs validés") {
             HorizontalBarChart(
                 r.regimeCoverages.map { c ->
-                    val color = when {
-                        c.coveredFraction >= 0.999 -> status.sufficient
-                        c.coveredFraction >= 0.9 -> status.limit
-                        else -> status.insufficient
-                    }
+                    val color = coverageColor(c)
                     BarEntry("${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", c.coveredFraction, color,
                         "Puissance disponible ${Fmt.watts(c.totalAvailableW)} pour ${Fmt.watts(c.totalNeedW)} de besoins")
                 },

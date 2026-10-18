@@ -96,45 +96,58 @@ class BackupManager @Inject constructor(
         val isZip = head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()
         var json: String? = null
         val photoFiles = mutableMapOf<String, File>()
-        if (isZip) {
-            resolver.openInputStream(uri)?.use { raw ->
-                ZipInputStream(BufferedInputStream(raw)).use { zip ->
-                    var entry = zip.nextEntry
-                    while (entry != null) {
-                        val name = entry.name
-                        when {
-                            entry.isDirectory -> Unit
-                            name == ProjectBackup.JSON_ENTRY -> json = zip.readBytes().toString(Charsets.UTF_8)
-                            name.startsWith(ProjectBackup.PHOTOS_DIR) -> {
-                                // Protection « zip slip » : on ne garde que le nom de fichier, copié sous un nouveau nom.
-                                val original = name.removePrefix(ProjectBackup.PHOTOS_DIR)
-                                if (original.isNotEmpty() && !original.contains('/') && !original.contains('\\') && !original.contains("..")) {
-                                    val target = photoStorage.newPhotoFile("import")
-                                    FileOutputStream(target).use { zip.copyTo(it) }
-                                    photoFiles[original] = target
+        // Toutes les copies écrites dans le stockage privé (doublons compris) : rien ne doit rester en cas d'échec.
+        val copied = mutableListOf<File>()
+        val id = try {
+            if (isZip) {
+                resolver.openInputStream(uri)?.use { raw ->
+                    ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                        var entry = zip.nextEntry
+                        while (entry != null) {
+                            val name = entry.name
+                            when {
+                                entry.isDirectory -> Unit
+                                name == ProjectBackup.JSON_ENTRY -> json = zip.readBytes().toString(Charsets.UTF_8)
+                                name.startsWith(ProjectBackup.PHOTOS_DIR) -> {
+                                    // Protection « zip slip » : on ne garde que le nom de fichier, copié sous un nouveau nom.
+                                    val original = name.removePrefix(ProjectBackup.PHOTOS_DIR)
+                                    if (original.isNotEmpty() && !original.contains('/') && !original.contains('\\') && !original.contains("..")) {
+                                        val target = photoStorage.newPhotoFile("import")
+                                        copied += target
+                                        FileOutputStream(target).use { zip.copyTo(it) }
+                                        photoFiles[original] = target
+                                    }
                                 }
                             }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
                         }
-                        zip.closeEntry()
-                        entry = zip.nextEntry
                     }
                 }
+            } else {
+                json = resolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
             }
-        } else {
-            json = resolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            val backup = BackupJson.decode(json ?: error("Archive sans fichier ${ProjectBackup.JSON_ENTRY}"))
+            repository.insertGraph(
+                building = backup.building,
+                settings = backup.settings,
+                scenarios = backup.scenarios,
+                measurements = backup.measurements,
+                photos = backup.photos.map { Triple(it.fileName, it.ownerId, it.kind) },
+                photoOwnerTypes = backup.photos.associate { it.fileName to (runCatching { PhotoOwner.valueOf(it.ownerType) }.getOrDefault(PhotoOwner.RADIATOR)) },
+                photoFiles = photoFiles,
+                nameSuffix = " (importé)",
+                fromBackup = true,
+            )
+        } catch (t: Throwable) {
+            // Échec (version, JSON, lecture, annulation) : aucune copie de photo ne reste sur le téléphone.
+            copied.forEach { it.delete() }
+            throw t
         }
-        val backup = BackupJson.decode(json ?: error("Archive sans fichier ${ProjectBackup.JSON_ENTRY}"))
-        repository.insertGraph(
-            building = backup.building,
-            settings = backup.settings,
-            scenarios = backup.scenarios,
-            measurements = backup.measurements,
-            photos = backup.photos.map { Triple(it.fileName, it.ownerId, it.kind) },
-            photoOwnerTypes = backup.photos.associate { it.fileName to (runCatching { PhotoOwner.valueOf(it.ownerType) }.getOrDefault(PhotoOwner.RADIATOR)) },
-            photoFiles = photoFiles,
-            nameSuffix = " (importé)",
-            fromBackup = true,
-        )
+        // Copies non rattachées au projet (propriétaire introuvable, entrée absente du JSON) : supprimées.
+        val used = repository.loadProject(id)?.photos?.map { it.fileName }?.toSet().orEmpty()
+        copied.filter { it.name !in used }.forEach { it.delete() }
+        id
     }
 
     companion object {

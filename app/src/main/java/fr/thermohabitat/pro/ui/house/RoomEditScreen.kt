@@ -136,11 +136,11 @@ class RoomEditViewModel @Inject constructor(
         exterior: Set<Orientation>, wallTemplate: String?, floor: Boundary?, floorTemplate: String?,
         ceiling: Boundary?, ceilingTemplate: String?, interior: Boolean,
     ) = viewModelScope.launch {
-        saver.flush()
+        saver.flushNow()
         repository.addStandardSurfaces(roomId, exterior, wallTemplate, floor, floorTemplate, ceiling, ceilingTemplate, interior)
     }
 
-    suspend fun addSurface(kind: SurfaceKind, boundary: Boundary): Long { saver.flush(); return repository.addSurface(roomId, kind, boundary) }
+    suspend fun addSurface(kind: SurfaceKind, boundary: Boundary): Long { saver.flushNow(); return repository.addSurface(roomId, kind, boundary) }
 
     fun addBridge(label: String, length: Double, psi: Double) = viewModelScope.launch { repository.addBridge(roomId, label, length, psi) }
     fun deleteBridge(id: Long) = viewModelScope.launch { repository.deleteBridge(id) }
@@ -158,7 +158,7 @@ class RoomEditViewModel @Inject constructor(
     fun deletePhoto(id: Long) = viewModelScope.launch { repository.deletePhoto(id) }
 
     fun delete(onDone: () -> Unit) = viewModelScope.launch { repository.deleteRoom(roomId); onDone() }
-    suspend fun duplicate(): Long? { saver.flush(); return repository.duplicateRoom(roomId) }
+    suspend fun duplicate(): Long? { saver.flushNow(); return repository.duplicateRoom(roomId) }
 
     override fun onCleared() { saver.flush() }
 }
@@ -194,7 +194,7 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
             SectionCard("Identification", icon = Icons.Filled.Thermostat) {
                 TextInput("Nom de la pièce", r.name, { v -> vm.update { it.copy(name = v) } })
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IntField("Niveau", r.floorLevel, { v -> vm.update { it.copy(floorLevel = v ?: 0) } }, Modifier.weight(1f), min = -3, max = 20,
+                    IntField("Niveau", r.floorLevel, { v -> v?.let { n -> vm.update { it.copy(floorLevel = n) } } }, Modifier.weight(1f), min = -3, max = 20, nullable = false,
                         supportingText = floorLabel(r.floorLevel))
                     NumberField("Consigne", r.setpointC, { v -> vm.update { it.copy(setpointC = v ?: 20.0) } }, Modifier.weight(1f), unit = "°C",
                         decimals = 1, nullable = false, min = 5.0, max = 30.0, supportingText = "Usuel : ${Fmt.temp(r.usage.usualSetpointC, 0)}")
@@ -270,7 +270,7 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
                 val radiators = p?.project?.building?.radiatorsIn(r.id).orEmpty()
                 if (radiators.isEmpty()) Text("Aucun radiateur associé.", style = MaterialTheme.typography.bodySmall)
                 radiators.forEach { rad ->
-                    val out = regime?.let { RadiatorPower.outputOf(rad, it.supplyC, it.returnC ?: (it.supplyC - 10), r.setpointC) }
+                    val out = regime?.let { fr.thermohabitat.thermal.calc.CoverageAnalyzer.outputFor(rad, it.supplyC, it.mode, r.setpointC) }
                     Row(Modifier.fillMaxWidth().clickable { nav.navigate(RadiatorEditRoute(rad.id)) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("${rad.code} · ${rad.label.ifBlank { rad.type.label }}", style = MaterialTheme.typography.bodyMedium)

@@ -211,7 +211,7 @@ class PdfReportGenerator @Inject constructor(
         for (rad in b.radiators) {
             val nominal = RadiatorPower.resolveNominal(rad)
             val room = b.room(rad.roomId)
-            val out = RadiatorPower.outputOf(rad, regime.supplyC, regime.returnC ?: (regime.supplyC - 10), room?.setpointC ?: 20.0)
+            val out = CoverageAnalyzer.outputFor(rad, regime.supplyC, regime.mode, room?.setpointC ?: 20.0)
             val photo = p.photosOf(PhotoOwner.RADIATOR, rad.id).let { list -> list.firstOrNull { it.kind == fr.thermohabitat.thermal.model.PhotoKind.FRONT } ?: list.firstOrNull() }
             val bitmap = photo?.let { PhotoStorage.decodeOriented(photoStorage.file(it.fileName), 600) }
             w.radiatorBlock(
@@ -227,16 +227,26 @@ class PdfReportGenerator @Inject constructor(
                     when (nominal?.basis) {
                         null -> "Puissance : inconnue"
                         fr.thermohabitat.thermal.calc.PowerBasis.DOCUMENTED -> "Puissance nominale documentée : ${wt(nominal.nominalW)} à ${nominal.rating.label}"
-                        else -> "Puissance estimée : ${wt(nominal.nominalW)} (${wt(nominal.lowW)} – ${wt(nominal.highW)}) à ΔT 50 K"
+                        else -> "Puissance estimée : ${wt(nominal.nominalW)} (${wt(nominal.lowW)} – ${wt(nominal.highW)}) à " +
+                            if (nominal.rating == fr.thermohabitat.thermal.model.RatingCondition.EN442) "ΔT 50 K (${nominal.rating.label})" else nominal.rating.label
                     },
-                    "Au régime ${regime.supplyC.toInt()}/${regime.returnC?.toInt() ?: "–"} °C : ${wt(out.powerW)}",
-                    if (rad.validated) "Caractéristiques validées par l'utilisateur" else "NON VALIDÉ – exclu du bilan",
+                    "Au régime ${regime.supplyC.toInt()}/${regime.returnC?.toInt() ?: n(out.returnC, 0)} °C" +
+                        (if (regime.returnC == null) " (retour calculé à débit nominal)" else "") + " : ${wt(out.powerW)}",
+                    when {
+                        !rad.validated -> "NON VALIDÉ – exclu du bilan"
+                        !RadiatorPower.countsInStudy(rad) -> "Validé, mais puissance non établie – exclu du bilan"
+                        room == null -> "Validé, mais non attribué à une pièce – exclu du bilan"
+                        else -> "Caractéristiques validées par l'utilisateur"
+                    },
                 ),
             )
             bitmap?.recycle()
         }
         w.subheading("Puissance disponible selon le régime d'eau (radiateurs validés)")
-        val validated = b.radiators.filter { it.validated }
+        val validated = b.radiators.filter { RadiatorPower.countsInStudy(it) }
+        if (regime.mode is fr.thermohabitat.thermal.calc.HydraulicMode.FixedFlow) {
+            w.note("Ce tableau suppose un écart départ/retour constant ; la couverture de l'étude est calculée à débit nominal conservé.")
+        }
         w.table(listOf("Radiateur") + Regime.STANDARD.map { "${it.supplyC.toInt()}/${it.returnC.toInt()}" },
             validated.map { rad ->
                 val amb = b.room(rad.roomId)?.setpointC ?: 20.0
@@ -390,13 +400,35 @@ class PdfReportGenerator @Inject constructor(
 
         private fun ensure(h: Float) { if (y + h > pageH - 45f) newPage() }
 
+        /** Hauteur utile d'une page (entre la marge haute et le pied de page). */
+        private val usableH get() = pageH - 45f - margin
+
         private fun layout(text: String, paint: TextPaint, width: Float = contentW): StaticLayout =
             StaticLayout.Builder.obtain(text, 0, text.length, paint, width.toInt()).setAlignment(Layout.Alignment.ALIGN_NORMAL).build()
 
         private fun drawLayout(l: StaticLayout, x: Float = margin) {
-            ensure(l.height.toFloat())
-            canvas.save(); canvas.translate(x, y); l.draw(canvas); canvas.restore()
-            y += l.height
+            if (l.height <= usableH) {
+                ensure(l.height.toFloat())
+                canvas.save(); canvas.translate(x, y); l.draw(canvas); canvas.restore()
+                y += l.height
+                return
+            }
+            // Bloc plus haut qu'une page (notes longues) : découpé ligne à ligne sur plusieurs pages.
+            var lineIndex = 0
+            while (lineIndex < l.lineCount) {
+                ensure((l.getLineBottom(lineIndex) - l.getLineTop(lineIndex)).toFloat())
+                val top = l.getLineTop(lineIndex)
+                var last = lineIndex
+                while (last + 1 < l.lineCount && y + (l.getLineBottom(last + 1) - top) <= pageH - 45f) last++
+                val bottom = l.getLineBottom(last)
+                canvas.save()
+                canvas.translate(x, y - top)
+                canvas.clipRect(0f, top.toFloat(), l.width.toFloat(), bottom.toFloat())
+                l.draw(canvas)
+                canvas.restore()
+                y += bottom - top
+                lineIndex = last + 1
+            }
         }
 
         fun space(h: Float) { y += h }
@@ -407,7 +439,8 @@ class PdfReportGenerator @Inject constructor(
         fun note(text: String) { drawLayout(layout(text, small)); space(4f) }
         fun bullet(text: String) {
             val l = layout(text, body, contentW - 12f)
-            ensure(l.height.toFloat())
+            // La puce reste avec sa première ligne.
+            ensure(if (l.height <= usableH) l.height.toFloat() else l.getLineBottom(0).toFloat())
             canvas.drawText("•", margin + 2f, y + body.textSize, body)
             drawLayout(l, margin + 12f)
             space(2f)
@@ -452,13 +485,14 @@ class PdfReportGenerator @Inject constructor(
         fun barChart(title: String, data: List<Pair<String, Double>>) {
             if (data.isEmpty()) return
             val h = 18f * data.size + 24f
-            ensure(h)
+            ensure(if (h <= usableH) h else 16f + 18f)
             canvas.drawText(title, margin, y + 10f, h3)
             y += 16f
             val max = data.maxOf { it.second }.coerceAtLeast(1.0)
             val labelW = contentW * 0.3f
             fill.color = Color.rgb(11, 138, 158)
             data.forEach { (label, v) ->
+                ensure(18f) // saut de page entre deux barres si nécessaire
                 canvas.drawText(label.take(28), margin, y + 10f, body)
                 val bw = ((contentW * 0.55f) * (v / max)).toFloat()
                 canvas.drawRect(RectF(margin + labelW, y + 2f, margin + labelW + bw, y + 13f), fill)

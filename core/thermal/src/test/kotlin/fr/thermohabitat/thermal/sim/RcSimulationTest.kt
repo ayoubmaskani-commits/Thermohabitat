@@ -121,4 +121,61 @@ class RcSimulationTest {
         assertThat(cal.rmseAfterC).isLessThan(cal.rmseBeforeC)
         assertThat(cal.rmseAfterC).isLessThan(0.02)
     }
+
+    @Test
+    fun `calage capacite et deperditions - les deux facteurs sont retrouves`() {
+        val model = ZoneModelBuilder.build(SampleProjects.pise1870(), singleZone = true)
+        val config = SimulationConfig(durationH = 10.0, outdoor = OutdoorProfile.Constant(2.0), initialTempC = 20.0)
+        val truth = simulator.simulate(model.zones.map { it.scaled(1.0, 1.5) }, emptyList(), config)
+        val measures = (1..10).map { h -> MeasuredPoint(h.toDouble(), truth.interpolate(truth.zones.single().airTempC, h.toDouble())) }
+        val cal = Calibrator.calibrate(model, config, measures, fitConductance = true)
+        assertThat(cal.capacityFactor).isWithin(0.02).of(1.0)
+        assertThat(cal.conductanceFactor).isWithin(0.03).of(1.5)
+        assertThat(cal.rmseAfterC).isLessThan(0.01)
+    }
+
+    @Test
+    fun `maison entiere - meme H permanent que le modele multizone`() {
+        val building = SampleProjects.pise1870()
+        val multi = ZoneModelBuilder.build(building)
+        val single = ZoneModelBuilder.build(building, singleZone = true).zones.single()
+        assertThat(single.steadyStateHWk).isWithin(1e-6).of(multi.zones.sumOf { it.steadyStateHWk })
+    }
+
+    @Test
+    fun `petite piece tres deperditive - H opaque conserve`() {
+        // Pièce sans composition (A_m = surface au sol) : H opaque supérieur à 0,95·H_ms.
+        val wc = fr.thermohabitat.thermal.model.Room(1, "WC", 0, 1.2, 2.0, 2.5, surfaces = listOf(
+            fr.thermohabitat.thermal.model.Surface(id = 10, kind = fr.thermohabitat.thermal.model.SurfaceKind.WALL,
+                boundary = fr.thermohabitat.thermal.model.Boundary.EXTERIOR, lengthM = 2.0, uValueOverride = 2.5),
+            fr.thermohabitat.thermal.model.Surface(id = 11, kind = fr.thermohabitat.thermal.model.SurfaceKind.WALL,
+                boundary = fr.thermohabitat.thermal.model.Boundary.EXTERIOR, lengthM = 1.2, uValueOverride = 2.5),
+            fr.thermohabitat.thermal.model.Surface(id = 12, kind = fr.thermohabitat.thermal.model.SurfaceKind.CEILING,
+                boundary = fr.thermohabitat.thermal.model.Boundary.EXTERIOR, uValueOverride = 3.0),
+        ))
+        val building = fr.thermohabitat.thermal.TestFixtures.simpleBuilding(rooms = listOf(wc))
+        val hl = fr.thermohabitat.thermal.calc.HeatLossCalculator().calculate(building)
+        val zone = ZoneModelBuilder.build(building, hl).zones.single()
+        val opaque = hl.rooms.single().elements.sumOf { it.hWk }
+        assertThat(opaque).isGreaterThan(0.95 * zone.hAirMassWk)
+        assertThat(zone.steadyStateHWk).isWithin(1e-6).of(opaque + hl.ventilationHWk)
+    }
+
+    @Test
+    fun `couplage entre pieces - mur et porte additionnes, paroi saisie des deux cotes comptee une fois`() {
+        fun wall(id: Long, adj: Long) = fr.thermohabitat.thermal.model.Surface(
+            id = id, kind = fr.thermohabitat.thermal.model.SurfaceKind.WALL, boundary = fr.thermohabitat.thermal.model.Boundary.HEATED_ROOM,
+            lengthM = 4.0, heightM = 2.5, adjacentRoomId = adj, uValueOverride = 2.0,
+            openings = listOf(fr.thermohabitat.thermal.model.Opening(id = id * 10, kind = fr.thermohabitat.thermal.model.OpeningKind.DOOR,
+                widthM = 0.83, heightM = 2.04, uValue = 3.5)),
+        )
+        val a = fr.thermohabitat.thermal.model.Room(1, "A", 0, 4.0, 4.0, 2.5, setpointC = 20.0, surfaces = listOf(wall(10, 2)))
+        val b = fr.thermohabitat.thermal.model.Room(2, "B", 0, 4.0, 4.0, 2.5, setpointC = 16.0)
+        val expected = (10.0 - 0.83 * 2.04) * 2.0 + 0.83 * 2.04 * 3.5
+        val one = ZoneModelBuilder.build(fr.thermohabitat.thermal.TestFixtures.simpleBuilding(rooms = listOf(a, b))).couplings.single()
+        assertThat(one.hWk).isWithin(1e-6).of(expected)
+        val mirrored = ZoneModelBuilder.build(fr.thermohabitat.thermal.TestFixtures.simpleBuilding(
+            rooms = listOf(a, b.copy(surfaces = listOf(wall(20, 1)))))).couplings.single()
+        assertThat(mirrored.hWk).isWithin(1e-6).of(expected)
+    }
 }

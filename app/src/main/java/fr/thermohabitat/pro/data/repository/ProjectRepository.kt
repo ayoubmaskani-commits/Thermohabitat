@@ -158,7 +158,6 @@ class ProjectRepository @Inject constructor(
         buildingDao.update(b.copy(settingsJson = json.encodeToString(StudySettings.serializer(), s), updatedAt = System.currentTimeMillis()))
     }
 
-    /** Suppression complète d'un projet : base de données ET fichiers photo. */
     /** Suppression complète : base de données, photos ET exports générés (rapports, sauvegardes, CSV contiennent des copies). */
     suspend fun deleteBuilding(id: Long) {
         photoDao.getForBuilding(id).forEach { photoStorage.delete(it.fileName) }

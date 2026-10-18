@@ -114,9 +114,11 @@ fun FloorPlan(
                         if (id != null) {
                             val r = laidOut.first { it.id == id }
                             val o = dragOffsets[id] ?: Offset.Zero
-                            val nx = (r.x!! + o.x / scale).coerceAtLeast(0.0)
-                            val ny = (r.y!! + o.y / scale).coerceAtLeast(0.0)
-                            onRoomMoved(id, Math.round(nx * 10) / 10.0, Math.round(ny * 10) / 10.0)
+                            val nx = Math.round((r.x!! + o.x / scale).coerceAtLeast(0.0) * 10) / 10.0
+                            val ny = Math.round((r.y!! + o.y / scale).coerceAtLeast(0.0) * 10) / 10.0
+                            // Position inchangée (bord du plan, arrondi) : la liste des pièces ne changera pas,
+                            // le décalage du glisser est donc effacé ici.
+                            if (nx == r.x && ny == r.y) dragOffsets.remove(id) else onRoomMoved(id, nx, ny)
                         }
                         dragging = null
                     },

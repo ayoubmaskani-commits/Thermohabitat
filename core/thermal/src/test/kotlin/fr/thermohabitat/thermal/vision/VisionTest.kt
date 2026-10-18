@@ -104,4 +104,31 @@ class VisionTest {
     fun `texte illisible - aucune proposition`() {
         assertThat(NameplateParser.parse("~~ ## ..").isEmpty).isTrue()
     }
+
+    @Test
+    fun `trois elements - periode en limite de recherche`() {
+        for (w in listOf(200, 500, 1000)) {
+            assertThat(ElementCounter.count(syntheticRadiator(3, width = w)).count).isEqualTo(3)
+        }
+    }
+
+    @Test
+    fun `puissance avec separateur de milliers et kW decimaux`() {
+        assertThat(NameplateParser.parse("Puissance nominale 1 500 W").powerW!!.value).isWithin(1e-9).of(1500.0)
+        assertThat(NameplateParser.parse("1.500 W").powerW!!.value).isWithin(1e-9).of(1500.0)
+        assertThat(NameplateParser.parse("1\u00A0500 W").powerW!!.value).isWithin(1e-9).of(1500.0)
+        assertThat(NameplateParser.parse("1 290 kcal/h").powerW!!.value).isWithin(1e-6).of(1290 * 1.163)
+        assertThat(NameplateParser.parse("Puissance : 1,5 kW").powerW!!.value).isWithin(1e-9).of(1500.0)
+        assertThat(NameplateParser.parse("1,12 kW").powerW!!.value).isWithin(1e-9).of(1120.0)
+        assertThat(NameplateParser.parse("Type 22 600 W").powerW!!.value).isWithin(1e-9).of(600.0)
+        assertThat(NameplateParser.parse("1650.5 W").powerW!!.value).isWithin(1e-9).of(1650.5)
+    }
+
+    @Test
+    fun `reference - mot-cle entier uniquement`() {
+        assertThat(NameplateParser.parse("Puissance nominale 1500 W\nRéf. 22-600-1000").reference!!.value).isEqualTo("22-600-1000")
+        assertThat(NameplateParser.parse("Norme EN 442\n1500 W").reference).isNull()
+        assertThat(NameplateParser.parse("N°AB123").reference!!.value).isEqualTo("AB123")
+        assertThat(NameplateParser.parse("Refroidissement 12").reference).isNull()
+    }
 }
