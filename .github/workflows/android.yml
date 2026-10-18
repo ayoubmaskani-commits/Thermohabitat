@@ -14,6 +14,9 @@ jobs:
     name: Tests et APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -27,19 +30,29 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Tests unitaires du moteur thermique
-        run: ./gradlew --no-daemon --stacktrace :core:thermal:test
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :core:thermal:test 2>&1 | tee -a build.log
 
       - name: Compilation de l'APK de debug
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleDebug 2>&1 | tee -a build.log
 
       - name: Tests unitaires de l'application
-        run: ./gradlew --no-daemon --stacktrace :app:testDebugUnitTest
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:testDebugUnitTest 2>&1 | tee -a build.log
 
       - name: Compilation des tests instrumentés
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebugAndroidTest
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleDebugAndroidTest 2>&1 | tee -a build.log
 
       - name: APK release (R8, signé avec la clé de debug)
-        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :app:assembleRelease 2>&1 | tee -a build.log
 
       - name: Publication des APK
         uses: actions/upload-artifact@v4
@@ -59,3 +72,11 @@ jobs:
             core/thermal/build/reports/tests/
             app/build/reports/tests/
           if-no-files-found: ignore
+
+      - name: Résumé des erreurs
+        if: failure()
+        run: |
+          echo "===== ERREURS DE COMPILATION ====="
+          grep -E "^e: |error: |\[ksp\].*error|> Task .* FAILED|What went wrong" -A2 build.log | grep -v "^--$" | head -150 || true
+          echo "===== TESTS EN ÉCHEC ====="
+          grep -E "FAILED$|Exception|expected:" build.log | head -60 || true

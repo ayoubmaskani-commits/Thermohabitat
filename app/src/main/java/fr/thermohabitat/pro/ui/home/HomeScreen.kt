@@ -124,7 +124,8 @@ class HomeViewModel @Inject constructor(
     fun loadSample() = viewModelScope.launch {
         val sample = SampleProjects.pise1870()
         val id = repository.insertGraph(sample, StudySettings())
-        repository.updateSettings(id) { repository.defaultSettings(repository.loadProject(id)!!.entity) }
+        val defaults = repository.loadProject(id)?.entity?.let { repository.defaultSettings(it) } ?: StudySettings()
+        repository.updateSettings(id) { defaults }
         settings.setActiveBuilding(id)
     }
 }
