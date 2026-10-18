@@ -109,4 +109,16 @@ class RadiatorPowerTest {
         assertThat(n.nominalW).isEqualTo(900.0)
         assertThat(n.lowW).isWithin(1e-9).of(855.0)
     }
+
+    @Test
+    fun `conditions de reference incoherentes - aucune puissance inventee`() {
+        val invalid = RatingCondition(supplyC = 60.0, returnC = 70.0, ambientC = 20.0)
+        assertThat(invalid.isValid).isFalse()
+        assertThat(RadiatorPower.correctionFactor(invalid, 1.3, 55.0, 45.0, 20.0)).isEqualTo(0.0)
+        assertThat(RatingCondition(supplyC = 75.0, returnC = 65.0, ambientC = 70.0).isValid).isFalse()
+        // Retour saisi au-dessus du départ : borné au départ, résultat fini.
+        val f = RadiatorPower.correctionFactor(RatingCondition.EN442, 1.3, 50.0, 55.0, 20.0)
+        assertThat(f.isFinite()).isTrue()
+        assertThat(f).isWithin(1e-9).of((30.0 / RatingCondition.EN442.lmtd).pow(1.3))
+    }
 }

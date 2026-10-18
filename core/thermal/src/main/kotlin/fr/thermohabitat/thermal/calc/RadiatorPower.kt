@@ -73,8 +73,8 @@ object RadiatorPower {
     const val WATER_CP = 4186.0
 
     fun correctionFactor(rating: RatingCondition, exponent: Double, supplyC: Double, returnC: Double, ambientC: Double): Double {
-        if (supplyC <= ambientC || returnC <= ambientC) return 0.0
-        val dt = logMeanTemperatureDifference(supplyC, returnC, ambientC)
+        if (supplyC <= ambientC || returnC <= ambientC || !rating.isValid) return 0.0
+        val dt = logMeanTemperatureDifference(supplyC, minOf(returnC, supplyC), ambientC)
         return (dt / rating.lmtd).pow(exponent)
     }
 

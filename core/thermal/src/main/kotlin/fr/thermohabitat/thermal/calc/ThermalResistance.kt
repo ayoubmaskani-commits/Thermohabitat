@@ -60,12 +60,12 @@ object ThermalResistance {
 
     /** Résistance thermique d'une couche R = e / λ (m²·K/W). */
     fun layerResistance(layer: Layer, direction: HeatFlowDirection = HeatFlowDirection.HORIZONTAL): Double {
-        require(layer.thicknessM >= 0) { "Épaisseur négative" }
+        val e = layer.thicknessM.coerceAtLeast(0.0)
         return if (layer.material.isAirGap) {
-            airGapResistance(layer.thicknessM, direction)
+            airGapResistance(e, direction)
         } else {
-            require(layer.lambda > 0) { "Conductivité nulle pour ${layer.material.name}" }
-            layer.thicknessM / layer.lambda
+            // Une conductivité nulle ou négative (donnée importée incohérente) est bornée à 0,001 W/(m·K).
+            e / layer.lambda.coerceAtLeast(0.001)
         }
     }
 

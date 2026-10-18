@@ -14,8 +14,11 @@ data class RatingCondition(
     val returnC: Double = 65.0,
     val ambientC: Double = 20.0,
 ) {
-    /** Écart de température logarithmique moyen des conditions de référence. */
-    val lmtd: Double get() = logMeanTemperatureDifference(supplyC, returnC, ambientC)
+    /** Écart de température logarithmique moyen des conditions de référence (NaN si conditions incohérentes). */
+    val lmtd: Double get() = if (isValid) logMeanTemperatureDifference(supplyC, returnC, ambientC) else Double.NaN
+
+    /** Conditions physiquement cohérentes : départ ≥ retour > ambiance. */
+    val isValid: Boolean get() = supplyC >= returnC && returnC > ambientC
 
     val label: String get() = "${supplyC.fmt()}/${returnC.fmt()}/${ambientC.fmt()} °C"
 

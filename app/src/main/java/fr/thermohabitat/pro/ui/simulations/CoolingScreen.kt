@@ -139,7 +139,9 @@ class CoolingViewModel @Inject constructor(
         if (id == null) flowOf(emptyList()) else repository.observeMeasurements(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val data = combine(project, options, scenarios) { p, o, sc -> p?.let { compute(it, o, sc) } }
+    val data = combine(project, options, scenarios) { p, o, sc ->
+        if (p == null || p.project.building.rooms.isEmpty()) null else runCatching { compute(p, o, sc) }.getOrNull()
+    }
         .flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private fun heatingPowers(building: Building, settings: StudySettings): Map<Long, Double> {

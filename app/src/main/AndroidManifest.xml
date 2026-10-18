@@ -52,9 +52,5 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Modèle de reconnaissance de texte embarqué (ML Kit, hors ligne). -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr" />
     </application>
 </manifest>

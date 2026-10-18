@@ -87,11 +87,7 @@ class HouseViewModel @Inject constructor(
         return repository.addRoom(p.project.id, name, floor, length, width, usage = usage)
     }
 
-    fun moveRoom(roomId: Long, x: Double, y: Double) = viewModelScope.launch {
-        val p = state.value.project ?: return@launch
-        val room = p.project.rooms.firstOrNull { it.room.id == roomId }?.room ?: return@launch
-        repository.updateRoom(room.copy(planX = x, planY = y))
-    }
+    fun moveRoom(roomId: Long, x: Double, y: Double) = viewModelScope.launch { repository.moveRoomOnPlan(roomId, x, y) }
 }
 
 @Composable

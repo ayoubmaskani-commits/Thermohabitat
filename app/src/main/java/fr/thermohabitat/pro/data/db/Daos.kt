@@ -85,6 +85,9 @@ interface RoomDao {
 
     @Query("DELETE FROM rooms WHERE id = :id")
     suspend fun delete(id: Long)
+
+    @Query("UPDATE rooms SET planX = :x, planY = :y WHERE id = :id")
+    suspend fun movePlan(id: Long, x: Double?, y: Double?)
 }
 
 @Dao

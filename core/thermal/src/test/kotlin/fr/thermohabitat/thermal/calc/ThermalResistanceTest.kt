@@ -39,6 +39,15 @@ class ThermalResistanceTest {
     }
 
     @Test
+    fun `donnees de couche incoherentes - pas de plantage`() {
+        val pise = MaterialLibrary.byCode("pise")
+        assertThat(ThermalResistance.layerResistance(Layer(material = pise, thicknessM = -0.1))).isEqualTo(0.0)
+        val r = ThermalResistance.layerResistance(Layer(material = pise, thicknessM = 0.1, lambdaOverride = 0.0))
+        assertThat(r.isFinite()).isTrue()
+        assertThat(r).isWithin(1e-9).of(100.0)
+    }
+
+    @Test
     fun `U d'un mur en pise non isole`() {
         val layers = CompositionTemplates.find("pise_50")!!.toLayers()
         // R = 0,02/0,80 + 0,50/1,10 + 0,02/0,80 = 0,50455 ; Rt = 0,13 + R + 0,04

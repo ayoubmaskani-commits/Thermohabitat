@@ -3,7 +3,7 @@ package fr.thermohabitat.pro.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -221,7 +221,7 @@ fun LineChart(
                     }
                 }
                 .pointerInput(series) {
-                    detectDragGestures { change, _ ->
+                    detectHorizontalDragGestures { change, _ ->
                         val left = 44.dp.toPx(); val right = size.width - 8.dp.toPx()
                         cursorX = (xMin + ((change.position.x - left) / (right - left)).coerceIn(0f, 1f) * (xMax - xMin))
                     }

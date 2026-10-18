@@ -134,6 +134,9 @@ sealed interface AiUiState {
 /** Données minimales exigées avant validation. */
 fun validationIssues(r: RadiatorEntity): List<String> = buildList {
     if (r.type == RadiatorType.UNKNOWN) add("Le type de radiateur n'est pas identifié.")
+    if (r.nominalPowerW != null && !RatingCondition(r.ratingSupplyC, r.ratingReturnC, r.ratingAmbientC).isValid) {
+        add("Conditions de la puissance documentée incohérentes (le départ doit être ≥ au retour, lui-même > à l'ambiance).")
+    }
     val model = r.toModel()
     if (RadiatorPower.resolveNominal(model) == null) {
         add(

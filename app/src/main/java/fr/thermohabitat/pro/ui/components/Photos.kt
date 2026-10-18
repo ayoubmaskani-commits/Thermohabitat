@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -90,4 +92,26 @@ fun PhotoStrip(
         Text("Les photos restent dans le stockage privé de l'application, sur ce téléphone.", style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
     }
+}
+
+/** Visionneuse plein écran d'une photo avec suppression. */
+@Composable
+fun PhotoViewerDialog(photo: PhotoEntity, onDismiss: () -> Unit, onDelete: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${photo.kind.label} – ${fr.thermohabitat.pro.ui.util.Fmt.dateTime(photo.createdAt)}") },
+        text = {
+            val context = LocalContext.current
+            AsyncImage(
+                model = photoFile(context, photo.fileName),
+                contentDescription = photo.caption.ifBlank { photo.kind.label },
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxWidth().height(320.dp).clip(RoundedCornerShape(10.dp)),
+            )
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Fermer") } },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDelete) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
+        },
+    )
 }

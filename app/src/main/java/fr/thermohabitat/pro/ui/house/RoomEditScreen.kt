@@ -174,6 +174,7 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
     var showAddBridge by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var photoToDelete by remember { mutableStateOf<Long?>(null) }
+    var viewing by remember { mutableStateOf<fr.thermohabitat.pro.data.db.PhotoEntity?>(null) }
     val gallery = rememberGalleryPicker { vm.importPhotos(it) }
 
     ScreenScaffold(
@@ -306,7 +307,7 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
                     photos,
                     onCamera = { nav.navigate(CaptureRoute(PhotoOwner.ROOM.name, r.id, r.buildingId)) },
                     onGallery = { gallery.launch(galleryRequest()) },
-                    onOpen = { photoToDelete = it.id },
+                    onOpen = { viewing = it },
                 )
                 TextInput("Notes", r.notes, { v -> vm.update { it.copy(notes = v) } }, singleLine = false)
             }
@@ -331,6 +332,9 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
     if (confirmDelete) {
         ConfirmDialog("Supprimer la pièce ?", "Ses parois et photos seront supprimées. Les radiateurs associés seront conservés sans pièce.",
             "Supprimer", onConfirm = { vm.delete { nav.popBackStack() } }, onDismiss = { confirmDelete = false }, destructive = true)
+    }
+    viewing?.let { ph ->
+        fr.thermohabitat.pro.ui.components.PhotoViewerDialog(ph, onDismiss = { viewing = null }, onDelete = { viewing = null; photoToDelete = ph.id })
     }
     photoToDelete?.let { id ->
         ConfirmDialog("Supprimer la photo ?", "Le fichier sera effacé du téléphone.", "Supprimer",

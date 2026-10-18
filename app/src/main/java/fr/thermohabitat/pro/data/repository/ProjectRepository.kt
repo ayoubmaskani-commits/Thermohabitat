@@ -139,7 +139,11 @@ class ProjectRepository @Inject constructor(
         return buildingDao.insert(BuildingEntity(name = name))
     }
 
-    suspend fun updateBuilding(entity: BuildingEntity) = buildingDao.update(entity.copy(updatedAt = System.currentTimeMillis()))
+    /** Met à jour la fiche bâtiment ; les paramètres d'étude ne sont modifiés que par [updateSettings]. */
+    suspend fun updateBuilding(entity: BuildingEntity) {
+        val current = buildingDao.get(entity.id)
+        buildingDao.update(entity.copy(settingsJson = current?.settingsJson ?: entity.settingsJson, updatedAt = System.currentTimeMillis()))
+    }
 
     suspend fun updateSettings(buildingId: Long, transform: (StudySettings) -> StudySettings) {
         val b = buildingDao.get(buildingId) ?: return
@@ -176,7 +180,14 @@ class ProjectRepository @Inject constructor(
         return id
     }
 
-    suspend fun updateRoom(room: RoomEntity) { roomDao.update(room); touch(room.buildingId) }
+    /** Met à jour une pièce ; sa position sur le plan n'est modifiée que par [moveRoomOnPlan]. */
+    suspend fun updateRoom(room: RoomEntity) {
+        val current = roomDao.get(room.id)
+        roomDao.update(room.copy(planX = current?.planX ?: room.planX, planY = current?.planY ?: room.planY))
+        touch(room.buildingId)
+    }
+
+    suspend fun moveRoomOnPlan(roomId: Long, x: Double?, y: Double?) = roomDao.movePlan(roomId, x, y)
 
     suspend fun getRoom(id: Long): RoomEntity? = roomDao.get(id)
 
