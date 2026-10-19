@@ -26,6 +26,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.LooperMode
 import java.io.File
 import java.io.FileOutputStream
 
@@ -41,6 +42,7 @@ import java.io.FileOutputStream
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = HiltTestApplication::class, qualifiers = "w360dp-h1400dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@LooperMode(LooperMode.Mode.PAUSED) // le test s'exécute sur le fil principal (navigation, cycle de vie)
 class ScreenCaptureTest {
 
     /** Avant tout lancement de l'activité : le parcours ne s'exécute qu'avec -Pcaptures=true. */
@@ -90,7 +92,7 @@ class ScreenCaptureTest {
         step("14_scenarios") { back(); click("Scénarios d'amélioration") }
         step("15_energie") { back(); click("Consommations et coûts") }
         step("16_rapports") { back(); tab("Rapports") }
-        File(dir, "errors.txt").writeText(errors.joinToString("\n"))
+        File(dir, "errors.txt").writeText(errors.joinToString("\n", postfix = "\n"))
     }
 
     /** Exécute une étape de navigation puis capture l'écran ; une étape en échec est notée sans arrêter le parcours. */

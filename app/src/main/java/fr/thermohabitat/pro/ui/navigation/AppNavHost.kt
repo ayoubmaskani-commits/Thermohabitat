@@ -8,11 +8,16 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.House
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Thermostat
-import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -66,19 +71,26 @@ private val tabs = listOf(
 )
 
 /**
- * Libellé d'onglet sur une seule ligne : la taille du texte se réduit si nécessaire pour tenir dans la
- * largeur de l'onglet (petits écrans, police système agrandie), au lieu de couper le mot en deux.
+ * Taille commune des libellés d'onglets : le plus long (« Simulations ») doit tenir sur une ligne dans la
+ * largeur d'un onglet, même sur un petit écran avec une police système agrandie. Tous les onglets utilisent
+ * la même taille, pour une barre homogène.
  */
 @Composable
-private fun TabLabel(text: String) {
-    val style = MaterialTheme.typography.labelMedium
-    BasicText(
-        text,
-        maxLines = 1,
-        softWrap = false,
-        style = style.copy(color = LocalContentColor.current),
-        autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
-    )
+private fun rememberTabLabelStyle(): TextStyle {
+    val base = MaterialTheme.typography.labelMedium
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val tabWidthPx = with(density) { (LocalConfiguration.current.screenWidthDp.dp / tabs.size - 8.dp).toPx() }
+    return remember(base, tabWidthPx, density) {
+        val widest = tabs.maxOf { measurer.measure(it.label, base, maxLines = 1, softWrap = false).size.width }
+        val factor = if (widest > tabWidthPx) tabWidthPx / widest else 1f
+        base.copy(fontSize = base.fontSize * factor, letterSpacing = 0.sp)
+    }
+}
+
+@Composable
+private fun TabLabel(text: String, style: TextStyle) {
+    Text(text, style = style, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
 }
 
 /** Ouvre une section principale en conservant l'état des autres sections. */
@@ -99,6 +111,7 @@ fun AppNavHost(nav: NavHostController = rememberNavController()) {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (showBar) {
+                val labelStyle = rememberTabLabelStyle()
                 NavigationBar {
                     tabs.forEach { tab ->
                         NavigationBarItem(
@@ -106,7 +119,7 @@ fun AppNavHost(nav: NavHostController = rememberNavController()) {
                             selected = destination?.hierarchy?.any { it.hasRoute(tab.routeClass) } == true,
                             onClick = { nav.navigateToTab(tab.route) },
                             icon = { Icon(tab.icon, contentDescription = null) },
-                            label = { TabLabel(tab.label) },
+                            label = { TabLabel(tab.label, labelStyle) },
                         )
                     }
                 }
