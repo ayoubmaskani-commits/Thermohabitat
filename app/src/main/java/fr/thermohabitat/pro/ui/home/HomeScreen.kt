@@ -296,6 +296,7 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
                     BarEntry("${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", c.coveredFraction, color,
                         "Puissance disponible ${Fmt.watts(c.totalAvailableW)} pour ${Fmt.watts(c.totalNeedW)} de besoins")
                 },
+                maxValue = 1.0,
                 valueFormatter = { Fmt.pct(it) },
             )
         }

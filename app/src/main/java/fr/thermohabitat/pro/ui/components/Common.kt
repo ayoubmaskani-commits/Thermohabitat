@@ -5,11 +5,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,7 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -127,10 +133,15 @@ fun StatusChip(status: CoverageStatus, modifier: Modifier = Modifier, text: Stri
         Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(10.dp).background(color, RoundedCornerShape(50)))
             Spacer(Modifier.width(6.dp))
-            Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 2)
         }
     }
 }
+
+/** Couleur de texte lisible posée sur un fond pâle de la couleur [c] (assombrie en thème clair). */
+@Composable
+fun readableOn(c: Color): Color =
+    if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) lerp(c, Color.Black, 0.45f) else c
 
 /** Étiquette d'origine d'une donnée (mesurée / déclarée / estimée / inconnue). */
 @Composable
@@ -141,8 +152,9 @@ fun OriginBadge(origin: ValueOrigin, modifier: Modifier = Modifier) {
         ValueOrigin.ESTIMATED -> LocalStatusColors.current.limit
         ValueOrigin.UNKNOWN -> LocalStatusColors.current.insufficient
     }
-    Surface(modifier, color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp)) {
-        Text(origin.label, Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = color)
+    Surface(modifier, color = color.copy(alpha = 0.18f), shape = RoundedCornerShape(6.dp)) {
+        Text(origin.label, Modifier.padding(horizontal = 6.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold, color = readableOn(color), maxLines = 1)
     }
 }
 
@@ -154,7 +166,7 @@ fun InfoBanner(text: String, modifier: Modifier = Modifier, kind: BannerKind = B
     Surface(modifier.fillMaxWidth(), color = bg, shape = RoundedCornerShape(12.dp)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
             Icon(if (kind == BannerKind.WARNING) Icons.Filled.Warning else Icons.Filled.Info, null,
-                tint = if (kind == BannerKind.WARNING) LocalStatusColors.current.limit else MaterialTheme.colorScheme.primary,
+                tint = if (kind == BannerKind.WARNING) readableOn(LocalStatusColors.current.limit) else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
             Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
@@ -239,16 +251,27 @@ fun ValueRow(label: String, value: String, modifier: Modifier = Modifier, emphas
     }
 }
 
+/** Grand bouton d'action ; sa hauteur suit le libellé (police agrandie) au lieu de le rogner. */
 @Composable
 fun LargeActionButton(text: String, icon: ImageVector, onClick: () -> Unit, modifier: Modifier = Modifier, outlined: Boolean = false) {
     val content: @Composable () -> Unit = {
         Icon(icon, null)
         Spacer(Modifier.width(8.dp))
-        Text(text, style = MaterialTheme.typography.titleSmall)
+        Text(text, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.Center)
     }
-    if (outlined) {
-        OutlinedButton(onClick, modifier.fillMaxWidth().height(56.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { content() }
-    } else {
-        Button(onClick, modifier.fillMaxWidth().height(56.dp), contentPadding = PaddingValues(horizontal = 16.dp)) { content() }
+    val m = modifier.fillMaxWidth().heightIn(min = 56.dp)
+    val padding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+    if (outlined) OutlinedButton(onClick, m, contentPadding = padding) { content() } else Button(onClick, m, contentPadding = padding) { content() }
+}
+
+/**
+ * Rangée de boutons ou de puces qui passe à la ligne quand la place manque, au lieu d'écraser
+ * le dernier élément (libellé une lettre par ligne).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ActionRow(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        content()
     }
 }

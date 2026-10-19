@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -85,9 +87,13 @@ fun PhotoStrip(
         } else {
             Text("Aucune photo pour le moment.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onCamera) { Icon(Icons.Filled.CameraAlt, null); Text("  Appareil photo") }
-            OutlinedButton(onClick = onGallery) { Icon(Icons.Filled.PhotoLibrary, null); Text("  Galerie") }
+        ActionRow {
+            OutlinedButton(onClick = onCamera) {
+                Icon(Icons.Filled.CameraAlt, null); Spacer(Modifier.width(6.dp)); Text("Appareil photo", maxLines = 1)
+            }
+            OutlinedButton(onClick = onGallery) {
+                Icon(Icons.Filled.PhotoLibrary, null); Spacer(Modifier.width(6.dp)); Text("Galerie", maxLines = 1)
+            }
         }
         Text("Les photos restent dans le stockage privé de l'application, sur ce téléphone.", style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))

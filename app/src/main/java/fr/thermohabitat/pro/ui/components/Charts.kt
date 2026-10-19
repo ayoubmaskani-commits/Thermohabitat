@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fr.thermohabitat.pro.ui.util.Fmt
@@ -54,25 +56,36 @@ val ChartPalette = listOf(
 
 data class BarEntry(val label: String, val value: Double, val color: Color? = null, val detail: String? = null)
 
-/** Diagramme en barres horizontales interactif (toucher une barre affiche son détail). */
+/**
+ * Diagramme en barres horizontales interactif (toucher une barre affiche son détail). Libellé et valeur au-dessus
+ * de la barre, qui occupe toute la largeur : rien n'est tronqué au milieu d'un mot sur un petit écran.
+ * [maxValue] fixe l'échelle (1,0 pour des pourcentages), sinon la plus grande valeur.
+ */
 @Composable
-fun HorizontalBarChart(entries: List<BarEntry>, modifier: Modifier = Modifier, valueFormatter: (Double) -> String = { Fmt.watts(it) }) {
+fun HorizontalBarChart(
+    entries: List<BarEntry>,
+    modifier: Modifier = Modifier,
+    maxValue: Double? = null,
+    valueFormatter: (Double) -> String = { Fmt.watts(it) },
+) {
     var selected by remember(entries) { mutableStateOf<Int?>(null) }
-    val maxValue = entries.maxOfOrNull { abs(it.value) }?.takeIf { it > 0 } ?: 1.0
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val scale = maxValue ?: entries.maxOfOrNull { abs(it.value) }?.takeIf { it > 0 } ?: 1.0
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         entries.forEachIndexed { i, e ->
             val color = e.color ?: ChartPalette[i % ChartPalette.size]
-            Column(Modifier.fillMaxWidth().clickable { selected = if (selected == i) null else i }) {
+            Column(Modifier.fillMaxWidth().heightIn(min = 44.dp).clickable { selected = if (selected == i) null else i }.padding(vertical = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(e.label, Modifier.weight(0.38f), style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                    Box(Modifier.weight(0.42f).height(18.dp)) {
-                        Box(Modifier.fillMaxWidth(fraction = (abs(e.value) / maxValue).toFloat().coerceIn(0.01f, 1f)).height(18.dp)
-                            .background(if (selected == null || selected == i) color else color.copy(alpha = 0.35f), RoundedCornerShape(4.dp)))
-                    }
-                    Text(valueFormatter(e.value), Modifier.weight(0.2f).padding(start = 6.dp), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    Text(e.label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(8.dp))
+                    Text(valueFormatter(e.value), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                }
+                Spacer(Modifier.height(4.dp))
+                Box(Modifier.fillMaxWidth().height(12.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp))) {
+                    Box(Modifier.fillMaxWidth(fraction = (abs(e.value) / scale).toFloat().coerceIn(0.01f, 1f)).height(12.dp)
+                        .background(if (selected == null || selected == i) color else color.copy(alpha = 0.35f), RoundedCornerShape(4.dp)))
                 }
                 if (selected == i && e.detail != null) {
-                    Text(e.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                    Text(e.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 }
             }
         }
@@ -90,7 +103,7 @@ fun NeedVsAvailableChart(
     val needColor = MaterialTheme.colorScheme.outline
     val primary = MaterialTheme.colorScheme.primary
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        ActionRow {
             LegendDot(needColor, "Besoin")
             LegendDot(MaterialTheme.colorScheme.primary, "Disponible (couleur = couverture)")
         }
@@ -101,14 +114,14 @@ fun NeedVsAvailableChart(
                     Box(Modifier.weight(1f).height(10.dp)) {
                         Box(Modifier.fillMaxWidth((need / maxValue).toFloat().coerceIn(0.01f, 1f)).height(10.dp).background(needColor, RoundedCornerShape(3.dp)))
                     }
-                    Text(Fmt.watts(need), Modifier.width(72.dp).padding(start = 6.dp), style = MaterialTheme.typography.labelSmall)
+                    Text(Fmt.watts(need), Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f).height(10.dp)) {
                         Box(Modifier.fillMaxWidth((available / maxValue).toFloat().coerceIn(0.01f, 1f)).height(10.dp)
                             .background(colors.getOrElse(i) { primary }, RoundedCornerShape(3.dp)))
                     }
-                    Text(Fmt.watts(available), Modifier.width(72.dp).padding(start = 6.dp), style = MaterialTheme.typography.labelSmall)
+                    Text(Fmt.watts(available), Modifier.padding(start = 6.dp), style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
                 }
             }
         }

@@ -1,13 +1,11 @@
 package fr.thermohabitat.pro.ui.components
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -31,6 +29,16 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.model.ValueOrigin
@@ -78,7 +86,7 @@ fun NumberField(
                 t.isBlank() && nullable -> { if (focused) sent += null; onValueChange(null) }
             }
         },
-        label = { Text(label) },
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         suffix = unit?.let { { Text(it) } },
         singleLine = true,
         enabled = enabled,
@@ -145,7 +153,7 @@ fun TextInput(
     OutlinedTextField(
         value = text,
         onValueChange = { text = it; if (focused) sent += it; onValueChange(it) },
-        label = { Text(label) },
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
         supportingText = supportingText?.let { { Text(it) } },
@@ -172,7 +180,7 @@ fun <T> DropdownField(
             value = selected?.let(optionLabel) ?: placeholder,
             onValueChange = {},
             readOnly = true,
-            label = { Text(label) },
+            label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null) },
             supportingText = supportingText?.let { { Text(it) } },
             modifier = Modifier.fillMaxWidth(),
@@ -196,14 +204,7 @@ fun <T> DropdownField(
 /** Sélection de l'origine d'une donnée (mesurée, déclarée, estimée, inconnue). */
 @Composable
 fun OriginSelector(origin: ValueOrigin, onChange: (ValueOrigin) -> Unit, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        ValueOrigin.entries.forEach { o ->
-            FilterChip(selected = origin == o, onClick = { onChange(o) }, label = { Text(o.label) })
-        }
-    }
+    ChoiceChips(ValueOrigin.entries, origin, { it.label }, onChange, modifier)
 }
 
 @Composable
@@ -217,10 +218,52 @@ fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
     }
 }
 
-/** Rangée de puces de choix exclusif. */
+/**
+ * Puces de choix exclusif, réparties sur plusieurs lignes si nécessaire : toutes les options restent visibles,
+ * la sélection est marquée d'une coche.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun <T> ChoiceChips(options: List<T>, selected: T?, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        options.forEach { o -> FilterChip(selected = o == selected, onClick = { onSelect(o) }, label = { Text(label(o)) }) }
+    FlowRow(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { o ->
+            val isSelected = o == selected
+            FilterChip(
+                selected = isSelected,
+                onClick = { onSelect(o) },
+                label = { Text(label(o), maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = if (isSelected) { { Icon(Icons.Filled.Check, null, Modifier.size(FilterChipDefaults.IconSize)) } } else null,
+            )
+        }
+    }
+}
+
+/**
+ * Champs côte à côte s'ils ont chacun au moins [minFieldWidth] (agrandi avec la police système), sinon les uns
+ * sous les autres : sur un petit écran, chaque champ garde une largeur lisible. Les enfants occupent toute la
+ * largeur qui leur est donnée (ne pas leur passer de weight).
+ */
+@Composable
+fun FieldRow(modifier: Modifier = Modifier, minFieldWidth: Dp = 140.dp, spacing: Dp = 8.dp, content: @Composable () -> Unit) {
+    val fontScale = LocalDensity.current.fontScale
+    Layout(content, modifier.fillMaxWidth()) { measurables, constraints ->
+        val count = measurables.size
+        if (count == 0) return@Layout layout(0, 0) {}
+        val gap = spacing.roundToPx()
+        val width = constraints.maxWidth
+        val itemWidth = (width - gap * (count - 1)) / count
+        if (itemWidth >= (minFieldWidth * fontScale).roundToPx()) {
+            val placeables = measurables.map { it.measure(Constraints.fixedWidth(itemWidth)) }
+            layout(width, placeables.maxOf { it.height }) {
+                var x = 0
+                placeables.forEach { it.place(x, 0); x += itemWidth + gap }
+            }
+        } else {
+            val placeables = measurables.map { it.measure(Constraints.fixedWidth(width)) }
+            layout(width, placeables.sumOf { it.height } + gap * (count - 1)) {
+                var y = 0
+                placeables.forEach { it.place(0, y); y += it.height + gap }
+            }
+        }
     }
 }

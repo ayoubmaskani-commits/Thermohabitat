@@ -1,6 +1,7 @@
 package fr.thermohabitat.pro.ui.navigation
 
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Description
@@ -126,7 +127,7 @@ fun AppNavHost(nav: NavHostController = rememberNavController()) {
             }
         },
     ) { padding ->
-        NavHost(nav, startDestination = HomeRoute, modifier = Modifier.padding(padding)) {
+        NavHost(nav, startDestination = HomeRoute, modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
             composable<HomeRoute> { HomeScreen(nav) }
             composable<HouseRoute> { HouseScreen(nav) }
             composable<RadiatorsRoute> { RadiatorsScreen(nav) }
