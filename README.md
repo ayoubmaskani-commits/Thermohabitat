@@ -129,7 +129,10 @@ Thermohabitat/
 | `radiators` | fiches radiateurs (identification, dimensions, puissance, exposant, validation) |
 | `photos` | photographies (bâtiment, pièce ou radiateur ; face, côté, plaque…) |
 | `scenarios` | scénarios d'amélioration (JSON) |
-| `measurement_series` | températures mesurées pour le calage |
+| `measurement_series` | températures mesurées pour le calage, avec leurs conditions (extérieur, température initiale, durée) |
+
+La base est en version 2 ; la migration 1 → 2 ajoute les conditions des séries de mesures sans
+perte de données.
 
 ## 4. Fonctionnalités
 
@@ -219,16 +222,16 @@ Thermohabitat/
 |---|---|
 | Résistances et U | Rt = Rsi + Σe/λ + Rse (EN ISO 6946). Rsi = 0,13 / 0,10 / 0,17 selon le sens du flux, Rse = 0,04 vers l'extérieur. Lames d'air tabulées. |
 | Transmission | Φ_T = Σ A·U·f·(θint − θe). f = 1 vers l'extérieur, b vers un local non chauffé, (θint − θj)/(θint − θe) vers une pièce voisine ou un mitoyen. |
-| Terre-plein | U équivalent EN ISO 13370 (B' = A/0,5P, épaisseur équivalente dt), puis f_g1 = 1,45, f_g2 et G_w de l'EN 12831-1. |
+| Terre-plein | U équivalent EN ISO 13370 (B' = A/0,5P sur les seuls planchers, épaisseur équivalente dt), puis f_g1 = 1,45, f_g2 et G_w de l'EN 12831-1. Un périmètre exposé manquant est signalé. Un mur ou un rampant déclaré « terre-plein » est traité comme extérieur (prudent), avec un avertissement. |
 | Ponts thermiques | Forfait ΔU_TB sur l'enveloppe et/ou ψ·l détaillés. |
 | Ventilation, infiltrations | q_inf = 2·V·n50·e·ε et q_min = n_min·V. Naturelle, simple flux ou double flux (rendement). Au niveau du bâtiment : 0,5·Σq_inf. Φ_V = 0,34·q·ΔT. |
 | Radiateurs | Φ = Φn·(ΔT_ln/ΔT_ln,n)^n (NF EN 442), conditions 75/65/20 ou 90/70/20, mode débit imposé par bilan ṁ·cp·ΔT. |
 | Estimation sans référence | Corrélations géométriques (hauteur, profondeur, éléments ; type de panneau × longueur…) avec plage ±15 à ±40 %. Aucune puissance n'est déduite de la seule photo. |
 | Couleurs | Vert si la borne basse couvre le besoin, rouge sous 90 %, orange entre les deux. |
 | Température de départ | Recherche par dichotomie, pièce par pièce, à charge de conception ou partielle. |
-| PAC | COP constructeur interpolé, ou modèle générique η·T_ch/(T_ch − T_fr). Bivalence. SCOP par classes NF EN 14825 (climat moyen). |
-| Énergie | Besoins = H·DJU·24/1000·i. Consommation = besoins / rendement (ou SCOP). Calage sur la consommation réelle. |
-| Dynamique | 2 nœuds par pièce (air + masse), H_ms = 9,1·A_m, inertie par la règle des 10 cm (EN ISO 13786), Euler implicite, chauffage borné à la puissance des radiateurs. |
+| PAC | COP et puissance constructeur interpolés. Hors de la plage de la fiche, dans le sens défavorable (plus froid, eau plus chaude) : COP transposé par le rapport des COP de Carnot, puissance dégradée de 2,5 %/K extérieur et 0,5 %/K d'eau ; ces valeurs sont signalées comme transposées. Sans données : modèle générique η·T_ch/(T_ch − T_fr). Bivalence. SCOP par classes NF EN 14825 (climat moyen) ; sans puissance connue, l'appoint n'est pas évalué et le SCOP est signalé comme optimiste. |
+| Énergie | Besoins = H·DJU·24/1000·i, DJU corrigés selon la consigne moyenne (pondérée par le H des pièces) : ±1 DJU par kelvin et par jour de la saison de chauffage (≈ 205 j). Consommation = besoins / rendement (ou SCOP). Calage sur la consommation réelle : le rapport réel/modèle de l'état actuel est appliqué au besoin modélisé des scénarios. |
+| Dynamique | 2 nœuds par pièce (air + masse), H_ms = 9,1·A_m, inertie par la règle des 10 cm (EN ISO 13786), Euler implicite, chauffage borné à la puissance des radiateurs. Ventilation ramenée au débit du bâtiment (0,5·Σq_inf) ; la « maison entière » a le même H permanent que le modèle multizone. Calage capacité + déperditions par simplexe de Nelder-Mead. |
 
 Le dossier `core/thermal/src/test` contient les vérifications analytiques de chaque formule,
 ainsi que le cas d'usage réel (`CaseStudy1870Test`).
@@ -278,7 +281,7 @@ L'application affiche alors les 3 meilleures propositions avec leur confiance ; 
 
 ## 7. Tests
 
-**Moteur (`core/thermal`, 74 tests JVM)**
+**Moteur (`core/thermal`, 96 tests JVM)**
 - surfaces et volumes, résistances et U ;
 - terre-plein, déperditions, ventilation, infiltrations, ponts thermiques ;
 - correction des régimes de radiateurs, débit imposé, estimations ;
@@ -286,7 +289,10 @@ L'application affiche alors les 3 meilleures propositions avec leur confiance ; 
 - loi d'eau, COP, bivalence, SCOP, degrés-jours ;
 - simulation RC (solution analytique, équilibre, couplages) et calage ;
 - scénarios, sérialisation et sauvegardes ;
-- vision : comptage sur images synthétiques, mesure par référence, analyse de plaque ;
+- vision : comptage sur images synthétiques (dès 3 éléments), mesure par référence, analyse de plaque
+  (« 1 500 W », « 1,5 kW », kcal/h, références) ;
+- cas limites relevés en revue : bornes de loi d'eau inversées, données PAC hors plage, calage
+  appliqué aux scénarios, consigne et DJU, radiateur validé sans puissance, terre-plein ;
 - cas d'usage 1870.
 
 **Application (Robolectric)**
@@ -294,8 +300,9 @@ L'application affiche alors les 3 meilleures propositions avec leur confiance ; 
 - association radiateurs / pièces, clé étrangère `SET NULL` ;
 - aller-retour base ⇄ moteur sans écart de calcul ;
 - duplication de pièce, scénarios ;
-- sauvegarde ZIP avec photo puis réimport ;
-- suppression complète ;
+- sauvegarde ZIP avec photo puis réimport : scénarios renumérotés, matériaux et conditions de
+  mesure conservés ;
+- suppression complète, exports générés compris ;
 - CSV.
 
 **Sur appareil (`androidTest`)**
@@ -313,7 +320,8 @@ L'application affiche alors les 3 meilleures propositions avec leur confiance ; 
   désactivés.
 - Les fichiers ne quittent le téléphone que par un export choisi par l'utilisateur (partager,
   enregistrer sous).
-- Suppression complète d'un projet (données et photos) depuis l'onglet Rapports.
+- Suppression complète d'un projet (données, photos et exports générés) depuis l'onglet Rapports ;
+  les exports d'une session précédente sont effacés au démarrage.
 
 ## 9. Limites connues et suites
 
