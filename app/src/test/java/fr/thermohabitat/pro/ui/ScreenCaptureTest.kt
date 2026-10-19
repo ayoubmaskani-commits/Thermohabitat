@@ -2,13 +2,10 @@ package fr.thermohabitat.pro.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import dagger.hilt.android.testing.HiltAndroidRule
@@ -129,11 +126,14 @@ class ScreenCaptureTest {
         settle()
     }
 
+    /** Rendu logiciel de la fenêtre courante (la copie de pixels de Robolectric renvoie une image figée). */
     private fun capture(name: String) {
-        val bitmap = runCatching { compose.onRoot().captureToImage().asAndroidBitmap() }.getOrElse {
+        compose.waitForIdle()
+        var bitmap: Bitmap? = null
+        compose.runOnUiThread {
             val view = compose.activity.window.decorView
-            Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { b -> view.draw(Canvas(b)) }
+            bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { b -> view.draw(Canvas(b)) }
         }
-        FileOutputStream(File(dir, "$name.png")).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        FileOutputStream(File(dir, "$name.png")).use { bitmap!!.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 }
