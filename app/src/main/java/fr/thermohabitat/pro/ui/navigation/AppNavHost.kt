@@ -8,15 +8,20 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.House
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -60,6 +65,22 @@ private val tabs = listOf(
     Tab(ReportsRoute, ReportsRoute::class, "Rapports", Icons.Filled.Description),
 )
 
+/**
+ * Libellé d'onglet sur une seule ligne : la taille du texte se réduit si nécessaire pour tenir dans la
+ * largeur de l'onglet (petits écrans, police système agrandie), au lieu de couper le mot en deux.
+ */
+@Composable
+private fun TabLabel(text: String) {
+    val style = MaterialTheme.typography.labelMedium
+    BasicText(
+        text,
+        maxLines = 1,
+        softWrap = false,
+        style = style.copy(color = LocalContentColor.current),
+        autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = style.fontSize, stepSize = 0.5.sp),
+    )
+}
+
 /** Ouvre une section principale en conservant l'état des autres sections. */
 fun NavController.navigateToTab(route: Any) = navigate(route) {
     popUpTo(graph.findStartDestination().id) { saveState = true }
@@ -81,10 +102,11 @@ fun AppNavHost(nav: NavHostController = rememberNavController()) {
                 NavigationBar {
                     tabs.forEach { tab ->
                         NavigationBarItem(
+                            modifier = Modifier.testTag("tab:${tab.label}"),
                             selected = destination?.hierarchy?.any { it.hasRoute(tab.routeClass) } == true,
                             onClick = { nav.navigateToTab(tab.route) },
                             icon = { Icon(tab.icon, contentDescription = null) },
-                            label = { Text(tab.label) },
+                            label = { TabLabel(tab.label) },
                         )
                     }
                 }

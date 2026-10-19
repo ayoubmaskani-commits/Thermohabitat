@@ -145,7 +145,7 @@ fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel
             SectionCard("Bilan du bâtiment", icon = Icons.Filled.SwapHoriz) {
                 ValueRow("Besoins (somme des pièces)", Fmt.watts(c.totalNeedW))
                 ValueRow("Puissance disponible à ${d.regime.label}", Fmt.watts(c.totalAvailableW))
-                ValueRow("Besoins couverts", Fmt.pct(c.coveredFraction), emphasize = true)
+                ValueRow("Besoins couverts", Fmt.coverage(c), emphasize = true)
                 ValueRow("Pièces insuffisantes / limites", "${c.insufficientRooms.size} / ${c.limitRooms.size}")
                 val pending = c.rooms.sumOf { it.pendingRadiators }
                 if (pending > 0) InfoBanner("$pending radiateur(s) en attente de validation ne sont pas comptés.", kind = BannerKind.WARNING)

@@ -37,6 +37,9 @@ object Fmt {
 
     fun mm(v: Double?): String = if (v == null) "–" else "${num(v, 0)} mm"
 
+    /** Part des besoins couverts ; « – » tant qu'aucun besoin n'est calculé (aucune pièce saisie). */
+    fun coverage(c: fr.thermohabitat.thermal.calc.BuildingCoverage): String = if (c.totalNeedW <= 0.0) "–" else pct(c.coveredFraction)
+
     /** Température de départ nécessaire : distingue « non atteignable » (pièces non couvertes) de « indéterminée ». */
     fun supply(s: fr.thermohabitat.thermal.calc.BuildingSupplyRequirement, decimals: Int = 1): String = when {
         s.requiredSupplyC != null -> temp(s.requiredSupplyC, decimals)

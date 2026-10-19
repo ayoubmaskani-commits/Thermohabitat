@@ -155,7 +155,7 @@ fun ScenariosScreen(nav: NavController, vm: ScenariosViewModel = hiltViewModel()
                         HorizontalDivider()
                         ValueRow("Déperditions", "${Fmt.kw(c.before.heatLoss.totalW)} → ${Fmt.kw(c.after.heatLoss.totalW)} (−${Fmt.pct(c.heatLossReductionPct)})")
                         ValueRow("Départ nécessaire", "${c.before.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"} → ${c.after.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}")
-                        ValueRow("Couverture au régime étudié", "${Fmt.pct(c.before.studyCoverage.coveredFraction)} → ${Fmt.pct(c.after.studyCoverage.coveredFraction)}")
+                        ValueRow("Couverture au régime étudié", "${Fmt.coverage(c.before.studyCoverage)} → ${Fmt.coverage(c.after.studyCoverage)}")
                         ValueRow("Compatibilité PAC", "${c.before.compatibility.label} → ${c.after.compatibility.label}")
                         val pacBefore = c.before.energy.carriers.firstOrNull { it.carrier == EnergyCarrier.HEAT_PUMP }
                         val pacAfter = c.after.energy.carriers.firstOrNull { it.carrier == EnergyCarrier.HEAT_PUMP }

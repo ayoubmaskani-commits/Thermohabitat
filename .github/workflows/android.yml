@@ -80,3 +80,27 @@ jobs:
           grep -E "^e: |error: |\[ksp\].*error|> Task .* FAILED|What went wrong" -A2 build.log | grep -v "^--$" | head -150 || true
           echo "===== TESTS EN ÉCHEC ====="
           grep -E "FAILED$|Exception|expected:" build.log | head -60 || true
+
+      # Captures d'écran de l'application réelle (Robolectric, 360 dp, police 130 %) pour vérifier la mise en page.
+      # Étape informative : elle n'empêche pas la publication des APK.
+      - name: Captures d'écran
+        if: always()
+        continue-on-error: true
+        run: |
+          ./gradlew --no-daemon :app:testDebugUnitTest --tests 'fr.thermohabitat.pro.ui.ScreenCaptureTest' -Pcaptures=true 2>&1 | tail -25
+          echo "===== ÉTAPES EN ÉCHEC ====="
+          cat app/build/captures/errors.txt 2>/dev/null || echo "(aucun fichier)"
+          for f in app/build/captures/*.png; do
+            [ -f "$f" ] || continue
+            echo "=====CAPTURE $(basename "$f")"
+            base64 -w 3000 "$f"
+            echo "=====FIN"
+          done
+
+      - name: Publication des captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ecrans
+          path: app/build/captures/
+          if-no-files-found: ignore

@@ -37,7 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import fr.thermohabitat.pro.ui.theme.LocalStatusColors
 import fr.thermohabitat.thermal.calc.CoverageStatus
@@ -95,7 +97,13 @@ fun KpiCard(title: String, value: String, modifier: Modifier = Modifier, icon: I
                 icon?.let { Icon(it, null, tint = accent ?: MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)) }
                 Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
             }
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = accent ?: MaterialTheme.colorScheme.onSurface)
+            // Taille adaptée à la longueur : une valeur longue reste lisible sur une demi-largeur d'écran.
+            val valueStyle = when {
+                value.length <= 9 -> MaterialTheme.typography.headlineSmall
+                value.length <= 16 -> MaterialTheme.typography.titleLarge
+                else -> MaterialTheme.typography.titleMedium
+            }
+            Text(value, style = valueStyle, fontWeight = FontWeight.Bold, color = accent ?: MaterialTheme.colorScheme.onSurface)
             detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
@@ -149,7 +157,7 @@ fun InfoBanner(text: String, modifier: Modifier = Modifier, kind: BannerKind = B
                 tint = if (kind == BannerKind.WARNING) LocalStatusColors.current.limit else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium)
+            Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -185,14 +193,49 @@ fun ConfirmDialog(
     )
 }
 
-/** Ligne libellé / valeur pour les tableaux de résultats. */
+/**
+ * Ligne libellé / valeur des résultats. Libellé et valeur sont côte à côte quand la valeur est courte ;
+ * sinon la valeur passe sous le libellé, qui n'est jamais écrasé (petit écran, police agrandie).
+ */
 @Composable
 fun ValueRow(label: String, value: String, modifier: Modifier = Modifier, emphasize: Boolean = false, trailing: (@Composable () -> Unit)? = null) {
-    Row(modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = if (emphasize) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
-            fontWeight = if (emphasize) FontWeight.Bold else FontWeight.Medium)
-        trailing?.let { Spacer(Modifier.width(6.dp)); it() }
+    Layout(
+        modifier = modifier.fillMaxWidth().padding(vertical = 3.dp),
+        content = {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(value, Modifier.weight(1f, fill = false),
+                    style = if (emphasize) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (emphasize) FontWeight.Bold else FontWeight.Medium)
+                trailing?.let { Spacer(Modifier.width(6.dp)); it() }
+            }
+        },
+    ) { measurables, constraints ->
+        val labelM = measurables[0]
+        val valueM = measurables[1]
+        val valueNatural = valueM.maxIntrinsicWidth(Constraints.Infinity)
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth
+            else labelM.maxIntrinsicWidth(Constraints.Infinity) + valueNatural
+        val gap = 12.dp.roundToPx()
+        if (valueNatural <= width * 0.55f) {
+            // Côte à côte : la valeur garde sa largeur naturelle, le libellé occupe le reste (retour à la ligne si besoin).
+            val vp = valueM.measure(Constraints(maxWidth = valueNatural))
+            val lp = labelM.measure(Constraints(maxWidth = (width - vp.width - gap).coerceAtLeast(0)))
+            val h = maxOf(lp.height, vp.height)
+            layout(width, h) {
+                lp.place(0, (h - lp.height) / 2)
+                vp.place(width - vp.width, (h - vp.height) / 2)
+            }
+        } else {
+            // Empilé : libellé puis valeur sur toute la largeur.
+            val lp = labelM.measure(Constraints(maxWidth = width))
+            val vp = valueM.measure(Constraints(maxWidth = width))
+            val spacing = 2.dp.roundToPx()
+            layout(width, lp.height + spacing + vp.height) {
+                lp.place(0, 0)
+                vp.place(0, lp.height + spacing)
+            }
+        }
     }
 }
 

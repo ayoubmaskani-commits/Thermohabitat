@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.ViewColumn
+import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -238,13 +239,19 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
         icon = Icons.Filled.House,
         action = { TextButton(onClick = onOpenHouse) { Text("Ouvrir") } },
     ) {
+        if (p.project.building.rooms.isEmpty()) {
+            // Étude sans pièce : les indicateurs vaudraient tous zéro ; on indique la prochaine étape.
+            InfoBanner("Étape suivante : saisissez les pièces (dimensions et parois) pour obtenir la puissance de chauffage nécessaire.")
+            Button(onClick = onOpenHouse) { Text("Saisir les pièces") }
+            return@SectionCard
+        }
         val cards = listOf(
             Triple("Surface habitable", Fmt.area(hl.heatedAreaM2), Icons.Filled.Straighten),
             Triple("Volume chauffé", Fmt.volume(hl.heatedVolumeM3), Icons.Filled.Layers),
             Triple("Puissance nécessaire", Fmt.kw(hl.totalW), Icons.Filled.Bolt),
             Triple("Pièces", "${p.project.building.rooms.size}", Icons.Filled.House),
             Triple("Radiateurs validés", "${r.validatedRadiatorCount} / ${r.radiatorCount}", Icons.Filled.ViewColumn),
-            Triple("Besoins couverts à ${coverage.supplyC.toInt()} °C", Fmt.pct(coverage.coveredFraction), Icons.Filled.CheckCircle),
+            Triple("Besoins couverts à ${coverage.supplyC.toInt()} °C", Fmt.coverage(coverage), Icons.Filled.CheckCircle),
             Triple("Départ nécessaire", Fmt.supply(r.supply), Icons.Filled.Thermostat),
             Triple("Compatibilité PAC", r.compatibility.label, Icons.Filled.Science),
         )
@@ -327,7 +334,7 @@ private fun ProjectCard(p: AnalyzedProject, active: Boolean, onClick: () -> Unit
             }
             Text("${Fmt.area(r.heatLoss.heatedAreaM2)} · ${Fmt.volume(r.heatLoss.heatedVolumeM3)} · ${p.project.building.rooms.size} pièces · ${r.radiatorCount} radiateurs",
                 style = MaterialTheme.typography.bodyMedium)
-            Text("Besoin ${Fmt.kw(r.heatLoss.totalW)} · couverture ${Fmt.pct(r.studyCoverage.coveredFraction)} à ${r.studyCoverage.supplyC.toInt()} °C · départ ${r.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}",
+            Text("Besoin ${Fmt.kw(r.heatLoss.totalW)} · couverture ${Fmt.coverage(r.studyCoverage)} à ${r.studyCoverage.supplyC.toInt()} °C · départ ${r.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}",
                 style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusChip(

@@ -137,7 +137,7 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                 ValueRow("Coefficient H", "${Fmt.num(hl.totalHWk, 1)} W/K")
                 ValueRow("Départ nécessaire à θe", Fmt.supply(d.analyzed.result.supply))
                 d.analyzed.result.regimeCoverages.filter { it.supplyC in listOf(45.0, 50.0, 55.0, 60.0) }.forEach { c ->
-                    ValueRow("Couverture à ${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", "${Fmt.pct(c.coveredFraction)} · ${c.insufficientRooms.size} pièce(s) insuffisante(s)")
+                    ValueRow("Couverture à ${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", "${Fmt.coverage(c)} · ${c.insufficientRooms.size} pièce(s) insuffisante(s)")
                 }
             }
 

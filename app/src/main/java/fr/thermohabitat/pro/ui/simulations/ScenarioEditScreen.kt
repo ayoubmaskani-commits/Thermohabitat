@@ -172,7 +172,7 @@ private fun ComparisonSection(c: ScenarioComparison) {
         }
         HorizontalDivider()
         ValueRow("Régime étudié", "${b.studyCoverage.supplyC.toInt()} → ${a.studyCoverage.supplyC.toInt()} °C")
-        ValueRow("Besoins couverts", "${Fmt.pct(b.studyCoverage.coveredFraction)} → ${Fmt.pct(a.studyCoverage.coveredFraction)}")
+        ValueRow("Besoins couverts", "${Fmt.coverage(b.studyCoverage)} → ${Fmt.coverage(a.studyCoverage)}")
         ValueRow("Départ nécessaire", "${b.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "–"} → ${a.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "–"}")
         ValueRow("Compatibilité PAC", "${b.compatibility.label} → ${a.compatibility.label}")
         HorizontalDivider()

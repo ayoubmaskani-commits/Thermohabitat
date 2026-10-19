@@ -50,6 +50,8 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // Parcours de captures d'écran (ScreenCaptureTest) activé par -Pcaptures=true.
+            all { it.systemProperty("captures", project.findProperty("captures")?.toString() ?: "false") }
         }
     }
 }
@@ -104,6 +106,11 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Captures d'écran de l'application réelle sous Robolectric (vérification de la mise en page).
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.hilt.android.testing)
+    kspTest(libs.hilt.compiler)
 
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.test.ext.junit)
