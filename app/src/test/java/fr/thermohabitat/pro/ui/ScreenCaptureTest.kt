@@ -2,7 +2,7 @@ package fr.thermohabitat.pro.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
@@ -61,6 +61,7 @@ class ScreenCaptureTest {
         override fun before() = RuntimeEnvironment.setFontScale(1.3f)
     }
 
+    // Règle v2 : coroutines de composition mises en file (StandardTestDispatcher) et exécutées sur le fil principal.
     @get:Rule(order = 2)
     val compose = createAndroidComposeRule<MainActivity>()
 
@@ -94,7 +95,10 @@ class ScreenCaptureTest {
 
     /** Exécute une étape de navigation puis capture l'écran ; une étape en échec est notée sans arrêter le parcours. */
     private fun step(name: String, action: () -> Unit) {
-        runCatching { action(); settle() }.onFailure { errors += "$name : ${it::class.simpleName} ${it.message?.lines()?.firstOrNull()}" }
+        runCatching { action(); settle() }.onFailure { e ->
+            val where = e.stackTrace.take(12).joinToString(" < ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+            errors += "$name : ${e::class.simpleName} ${e.message?.lines()?.firstOrNull()} [fil ${Thread.currentThread().name}] $where"
+        }
         runCatching { capture(name) }.onFailure { errors += "$name (capture) : ${it.message?.lines()?.firstOrNull()}" }
     }
 
