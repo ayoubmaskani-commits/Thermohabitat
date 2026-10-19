@@ -27,6 +27,11 @@ data class MeasurementSeries(
     val outdoorC: Double? = null,
     val startClockHour: Double = 22.0,
     val points: List<MeasuredPoint> = emptyList(),
+    /** Conditions de la mesure (absentes des sauvegardes antérieures). */
+    val outdoorMinC: Double? = null,
+    val outdoorMaxC: Double? = null,
+    val initialC: Double? = null,
+    val durationH: Double? = null,
 )
 
 /**

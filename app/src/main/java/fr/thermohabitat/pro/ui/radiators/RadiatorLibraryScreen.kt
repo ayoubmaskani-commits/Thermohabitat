@@ -48,15 +48,23 @@ class RadiatorLibraryViewModel @Inject constructor(
     val radiator = repository.observeRadiator(radiatorId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /** Applique la catégorie choisie : la fiche doit ensuite être validée par l'utilisateur. */
-    fun choose(cat: RadiatorCategory, onDone: () -> Unit) = viewModelScope.launch {
-        val r = repository.getRadiator(radiatorId) ?: return@launch
-        repository.updateRadiator(r.copy(
-            type = cat.type, material = cat.type.defaultMaterial, era = cat.era, categoryCode = cat.code,
-            columns = cat.columns ?: r.columns, panelType = cat.panelType ?: r.panelType,
-            identificationMethod = IdentificationMethod.LIBRARY, identificationConfidence = null, validated = false,
-            updatedAt = System.currentTimeMillis(),
-        ))
-        onDone()
+    /** Évite un double choix (double appui) qui fermerait aussi la fiche radiateur. */
+    private var choosing = false
+
+    fun choose(cat: RadiatorCategory, onDone: () -> Unit) {
+        if (choosing) return
+        choosing = true
+        viewModelScope.launch {
+            val r = repository.getRadiator(radiatorId)
+            if (r == null) { choosing = false; return@launch }
+            repository.updateRadiator(r.copy(
+                type = cat.type, material = cat.type.defaultMaterial, era = cat.era, categoryCode = cat.code,
+                columns = cat.columns ?: r.columns, panelType = cat.panelType ?: r.panelType,
+                identificationMethod = IdentificationMethod.LIBRARY, identificationConfidence = null, validated = false,
+                updatedAt = System.currentTimeMillis(),
+            ))
+            onDone()
+        }
     }
 }
 

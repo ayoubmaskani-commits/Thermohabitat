@@ -133,7 +133,9 @@ fun RadiatorsScreen(nav: NavController, vm: RadiatorsViewModel = hiltViewModel()
                 Text("Régime de chauffage", style = MaterialTheme.typography.labelLarge)
                 ChoiceChips(Regime.STANDARD, regime, { it.label }, { vm.regime.value = it })
                 NumberField("Température ambiante (vide : consigne de la pièce)", ambientOverride, { vm.ambient.value = it }, unit = "°C", decimals = 1, min = 5.0, max = 30.0)
-                val validatedOut = radiators.filter { it.validated }.mapNotNull { outputs[it.id] }
+                // Même critère que le bilan : validé, puissance établie, attribué à une pièce existante.
+                val validatedOut = radiators.filter { r -> RadiatorPower.countsInStudy(r) && r.roomId?.let { it in rooms } == true }
+                    .mapNotNull { outputs[it.id] }
                 ValueRow("Puissance disponible (radiateurs validés) à ${regime.label}", Fmt.watts(validatedOut.sumOf { it.powerW }), emphasize = true)
                 ValueRow("Plage d'incertitude", "${Fmt.watts(validatedOut.sumOf { it.lowW })} – ${Fmt.watts(validatedOut.sumOf { it.highW })}")
                 ValueRow("Besoin du bâtiment (somme des pièces)", Fmt.watts(p.result.heatLoss.sumOfRoomLoadsW))
@@ -169,15 +171,20 @@ fun RadiatorsScreen(nav: NavController, vm: RadiatorsViewModel = hiltViewModel()
                             Text(
                                 when (nominal?.basis) {
                                     PowerBasis.DOCUMENTED -> "Nominale : ${Fmt.watts(nominal.nominalW)} à ${nominal.rating.label}"
-                                    PowerBasis.ESTIMATED -> "Estimée : ${Fmt.watts(nominal.nominalW)} (${Fmt.watts(nominal.lowW)}–${Fmt.watts(nominal.highW)}) à ΔT 50 K"
+                                    PowerBasis.ESTIMATED -> "Estimée : ${Fmt.watts(nominal.nominalW)} (${Fmt.watts(nominal.lowW)}–${Fmt.watts(nominal.highW)}) à " +
+                                        if (nominal.rating == fr.thermohabitat.thermal.model.RatingCondition.EN442) "ΔT 50 K" else nominal.rating.label
                                     else -> "Puissance inconnue : compléter la fiche"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             Text("À ${regime.label} : ${Fmt.watts(out?.powerW)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             StatusChip(
-                                if (r.validated) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
-                                text = if (r.validated) "Caractéristiques validées" else "À valider – non compté dans l'étude",
+                                if (r.validated && r.roomId != null) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
+                                text = when {
+                                    !r.validated -> "À valider – non compté dans l'étude"
+                                    r.roomId == null -> "Validé, sans pièce – exclu du bilan"
+                                    else -> "Caractéristiques validées"
+                                },
                             )
                         }
                     }

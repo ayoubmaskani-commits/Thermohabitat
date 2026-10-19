@@ -104,6 +104,7 @@ import fr.thermohabitat.thermal.model.RadiatorType
 import fr.thermohabitat.thermal.model.RatingCondition
 import fr.thermohabitat.thermal.model.RoomUsage
 import fr.thermohabitat.thermal.model.ValueOrigin
+import fr.thermohabitat.thermal.vision.ExtractedField
 import fr.thermohabitat.thermal.vision.NameplateData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -131,6 +132,9 @@ sealed interface AiUiState {
     data class Done(val result: ClassificationResult) : AiUiState
 }
 
+/** Texte source d'un régime présumé (puissance en kcal/h lue sans conditions). */
+private const val PRESUMED_RATING_SOURCE = "présumé : kcal/h sans régime"
+
 /** Données minimales exigées avant validation. */
 fun validationIssues(r: RadiatorEntity): List<String> = buildList {
     if (r.type == RadiatorType.UNKNOWN) add("Le type de radiateur n'est pas identifié.")
@@ -139,11 +143,13 @@ fun validationIssues(r: RadiatorEntity): List<String> = buildList {
     }
     val model = r.toModel()
     if (RadiatorPower.resolveNominal(model) == null) {
-        add(
-            if (r.type == RadiatorType.DECORATIVE || r.type == RadiatorType.CONVECTOR || r.type == RadiatorType.UNKNOWN)
+        add(when {
+            r.type == RadiatorType.DECORATIVE || r.type == RadiatorType.CONVECTOR || r.type == RadiatorType.UNKNOWN ->
                 "Ce type ne permet pas d'estimation : saisissez la puissance nominale documentée."
-            else "Dimensions insuffisantes pour estimer la puissance (hauteur, profondeur ou longueur, nombre d'éléments) ou puissance nominale manquante."
-        )
+            r.type == RadiatorType.STEEL_PANEL && r.panelType == null ->
+                "Précisez le type de panneau (10, 11, 20, 21, 22 ou 33, lisible vu de dessus) ou saisissez la puissance nominale documentée."
+            else -> "Dimensions insuffisantes pour estimer la puissance (hauteur, profondeur ou longueur, nombre d'éléments) ou puissance nominale manquante."
+        })
     }
 }
 
@@ -191,8 +197,8 @@ class RadiatorEditViewModel @Inject constructor(
     }
 
     fun setType(t: RadiatorType) = update {
-        it.copy(type = t, material = if (it.material == RadiatorMaterial.UNKNOWN) t.defaultMaterial else it.material,
-            panelType = if (t == RadiatorType.STEEL_PANEL) it.panelType ?: PanelType.T22 else it.panelType)
+        // Le type de panneau (10 à 33) n'est jamais présumé : il est choisi par l'utilisateur.
+        it.copy(type = t, material = if (it.material == RadiatorMaterial.UNKNOWN) t.defaultMaterial else it.material)
     }
 
     fun setValidated(on: Boolean) = update { it.copy(validated = on, validatedAt = if (on) System.currentTimeMillis() else null) }
@@ -213,7 +219,11 @@ class RadiatorEditViewModel @Inject constructor(
             if ("model" in fields) d.model?.let { x = x.copy(model = it.value) }
             if ("reference" in fields) d.reference?.let { x = x.copy(reference = it.value) }
             if ("power" in fields) d.powerW?.let { x = x.copy(nominalPowerW = Math.round(it.value).toDouble(), nominalPowerOrigin = ValueOrigin.DECLARED) }
-            if ("rating" in fields) d.rating?.let { x = x.copy(ratingSupplyC = it.value.supplyC, ratingReturnC = it.value.returnC, ratingAmbientC = it.value.ambientC) }
+            if ("rating" in fields) d.rating?.let {
+                x = x.copy(ratingSupplyC = it.value.supplyC, ratingReturnC = it.value.returnC, ratingAmbientC = it.value.ambientC)
+                // Régime présumé (kcal/h sans mention) : incertitude élargie, visible dans la borne basse de la couverture.
+                if (it.sourceText == PRESUMED_RATING_SOURCE) x = x.copy(documentedUncertaintyPct = maxOf(x.documentedUncertaintyPct, 15.0))
+            }
             if ("panel" in fields) d.panelType?.let { x = x.copy(panelType = it.value, type = RadiatorType.STEEL_PANEL) }
             if ("height" in fields) d.heightMm?.let { x = x.copy(heightMm = it.value, dimensionsOrigin = ValueOrigin.DECLARED) }
             if ("length" in fields) d.lengthMm?.let { x = x.copy(lengthMm = it.value, dimensionsOrigin = ValueOrigin.DECLARED) }
@@ -305,8 +315,14 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                 ValueRow("Fiabilité", reliabilityLabel(r, nominal?.basis, nominal?.relativeUncertainty), emphasize = true)
                 ValueRow("Méthode d'identification", r.identificationMethod.label +
                     (r.identificationConfidence?.let { " (confiance ${Fmt.pct(it)})" } ?: ""))
-                StatusChip(if (r.validated) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
-                    text = if (r.validated) "Validé : pris en compte dans l'étude" else "À valider : non pris en compte")
+                // La clé étrangère garantit que roomId désigne une pièce existante (ou null).
+                val inStudy = r.validated && r.roomId != null
+                StatusChip(if (inStudy) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
+                    text = when {
+                        !r.validated -> "À valider : non pris en compte"
+                        r.roomId == null -> "Validé, mais non attribué à une pièce : exclu du bilan"
+                        else -> "Validé : pris en compte dans l'étude"
+                    })
             }
 
             // --- Photographies et outils ---
@@ -491,13 +507,19 @@ private fun OcrResultDialog(result: OcrResult, onDismiss: () -> Unit, onApply: (
             text = { Text("Rapprochez-vous de la plaque, évitez les reflets et photographiez-la bien de face.") },
             confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } })
         is OcrResult.Success -> {
-            val d = result.data
+            val raw = result.data
+            // Puissance en kcal/h sans régime lu : documentation antérieure à l'EN 442, en général donnée à ΔT 60 K (90/70/20).
+            val presumedOld = raw.rating == null && raw.powerW?.sourceText?.contains("kcal", ignoreCase = true) == true
+            val d = if (presumedOld) raw.copy(rating = ExtractedField(RatingCondition.DIN4703, PRESUMED_RATING_SOURCE, 0.3)) else raw
             val candidates = listOfNotNull(
                 d.manufacturer?.let { Triple("manufacturer", "Fabricant", "${it.value} (confiance ${Fmt.pct(it.confidence)})") },
                 d.model?.let { Triple("model", "Modèle", it.value) },
                 d.reference?.let { Triple("reference", "Référence", it.value) },
                 d.powerW?.let { Triple("power", "Puissance", "${Fmt.watts(it.value)} ← « ${it.sourceText} »") },
-                d.rating?.let { Triple("rating", "Conditions", it.value.label) },
+                d.rating?.let {
+                    if (presumedOld) Triple("rating", "Conditions présumées", "${it.value.label} (kcal/h : ancienne norme ΔT 60 K, régime non lu, à vérifier)")
+                    else Triple("rating", "Conditions", it.value.label)
+                },
                 d.panelType?.let { Triple("panel", "Type de panneau", it.value.label) },
                 d.heightMm?.let { Triple("height", "Hauteur", Fmt.mm(it.value)) },
                 d.lengthMm?.let { Triple("length", "Longueur", Fmt.mm(it.value)) },
@@ -516,6 +538,14 @@ private fun OcrResultDialog(result: OcrResult, onDismiss: () -> Unit, onApply: (
                                 Checkbox(checked = key in chosen, onCheckedChange = { chosen = if (it) chosen + key else chosen - key })
                                 Column { Text(label, fontWeight = FontWeight.Medium); Text(value, style = MaterialTheme.typography.bodySmall) }
                             }
+                        }
+                        if (d.powerW != null && d.rating == null) {
+                            Text("Régime de la puissance non lu : elle sera rattachée aux conditions actuelles de la fiche (par défaut EN 442 75/65/20 °C). " +
+                                "Vérifiez-les dans la section Puissance.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        }
+                        if (presumedOld && "rating" !in chosen && "power" in chosen) {
+                            Text("Puissance en kcal/h sans régime : la rattacher à 75/65/20 °C la surestime d'environ 26 % si elle est donnée à 90/70/20 °C.",
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                         }
                         Text("Vérifiez chaque valeur : la lecture automatique peut se tromper.", style = MaterialTheme.typography.labelSmall)
                     }

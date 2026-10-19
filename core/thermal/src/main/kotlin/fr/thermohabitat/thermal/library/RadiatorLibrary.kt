@@ -87,7 +87,8 @@ object RadiatorLibrary {
         ),
         RadiatorCategory(
             code = "panneaux_acier", title = "Panneaux acier (types 10 à 33)", type = RadiatorType.STEEL_PANEL,
-            era = RadiatorEra.MODERN, columns = null, panelType = PanelType.T22, depthRangeMm = 45..160, sectionPitchMm = null,
+            // Type de panneau non présumé : il se lit vu de dessus et change la puissance du simple au double.
+            era = RadiatorEra.MODERN, columns = null, panelType = null, depthRangeMm = 45..160, sectionPitchMm = null,
             description = "Un à trois panneaux d'acier, avec ou sans ailettes. Le type (11, 21, 22, 33) se lit vu de dessus.",
             visualCues = listOf("Façade lisse ou à cannelures horizontales", "Grille sur le dessus", "Ailettes visibles entre les panneaux"),
             measureTips = listOf("Comptez les panneaux et rangées d'ailettes vus de dessus.", "Mesurez longueur et hauteur hors tout."),

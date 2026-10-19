@@ -295,6 +295,13 @@ data class MeasurementSeriesEntity(
     val name: String,
     val roomId: Long? = null,
     val outdoorC: Double? = null,
+    /** Extérieur variable pendant la mesure (profil journalier), °C ; null si constant ou non enregistré. */
+    val outdoorMinC: Double? = null,
+    val outdoorMaxC: Double? = null,
+    /** Température intérieure au début de la mesure, °C. */
+    val initialC: Double? = null,
+    /** Durée simulée lors de l'enregistrement, h. */
+    val durationH: Double? = null,
     val startClockHour: Double = 22.0,
     /** Points mesurés sérialisés (liste de [fr.thermohabitat.thermal.sim.MeasuredPoint]). */
     val pointsJson: String = "[]",

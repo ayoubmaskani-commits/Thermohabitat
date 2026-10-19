@@ -238,4 +238,23 @@ class RepositoryTest {
         repo.deleteBuilding(id)
         assertThat(zip.exists()).isFalse()
     }
+
+    @Test
+    fun `sauvegarde - conditions d'une serie de mesures conservees`() = runBlocking {
+        val id = repo.insertGraph(SampleProjects.pise1870(), StudySettings())
+        repo.saveMeasurements(
+            fr.thermohabitat.pro.data.db.MeasurementSeriesEntity(buildingId = id, name = "Nuit", outdoorC = null,
+                outdoorMinC = -3.0, outdoorMaxC = 5.0, initialC = 21.5, durationH = 9.0, startClockHour = 22.0),
+            listOf(fr.thermohabitat.thermal.sim.MeasuredPoint(0.0, 21.5), fr.thermohabitat.thermal.sim.MeasuredPoint(8.0, 17.9)),
+        )
+        val backup = BackupManager(context, repo, photos)
+        val imported = backup.import(android.net.Uri.fromFile(backup.zipToCache(id, "Exemple")))
+        val m = repo.measurementsOf(imported).single()
+        assertThat(m.outdoorC).isNull()
+        assertThat(m.outdoorMinC).isEqualTo(-3.0)
+        assertThat(m.outdoorMaxC).isEqualTo(5.0)
+        assertThat(m.initialC).isEqualTo(21.5)
+        assertThat(m.durationH).isEqualTo(9.0)
+        assertThat(m.points).hasSize(2)
+    }
 }

@@ -152,8 +152,9 @@ class ProjectRepository @Inject constructor(
         buildingDao.update(entity.copy(settingsJson = current?.settingsJson ?: entity.settingsJson, updatedAt = System.currentTimeMillis()))
     }
 
-    suspend fun updateSettings(buildingId: Long, transform: (StudySettings) -> StudySettings) {
-        val b = buildingDao.get(buildingId) ?: return
+    /** Lecture-modification-écriture atomique : deux réglages modifiés coup sur coup ne s'écrasent pas. */
+    suspend fun updateSettings(buildingId: Long, transform: (StudySettings) -> StudySettings) = db.withTransaction {
+        val b = buildingDao.get(buildingId) ?: return@withTransaction
         val s = transform(decodeSettings(b))
         buildingDao.update(b.copy(settingsJson = json.encodeToString(StudySettings.serializer(), s), updatedAt = System.currentTimeMillis()))
     }
@@ -542,7 +543,8 @@ class ProjectRepository @Inject constructor(
             }
             measurements.forEach { m ->
                 saveMeasurements(MeasurementSeriesEntity(buildingId = bId, name = m.name, roomId = m.roomId?.let { roomIds[it] },
-                    outdoorC = m.outdoorC, startClockHour = m.startClockHour), m.points)
+                    outdoorC = m.outdoorC, outdoorMinC = m.outdoorMinC, outdoorMaxC = m.outdoorMaxC, initialC = m.initialC,
+                    durationH = m.durationH, startClockHour = m.startClockHour), m.points)
             }
             photos.forEach { (fileName, ownerId, kind) ->
                 val file = photoFiles[fileName] ?: return@forEach
@@ -562,7 +564,10 @@ class ProjectRepository @Inject constructor(
     suspend fun scenariosOf(buildingId: Long): List<Scenario> = observeScenarios(buildingId).first().map { it.second }
 
     suspend fun measurementsOf(buildingId: Long): List<MeasurementSeries> =
-        observeMeasurements(buildingId).first().map { (e, pts) -> MeasurementSeries(e.name, e.roomId, e.outdoorC, e.startClockHour, pts) }
+        observeMeasurements(buildingId).first().map { (e, pts) ->
+            MeasurementSeries(e.name, e.roomId, e.outdoorC, e.startClockHour, pts,
+                outdoorMinC = e.outdoorMinC, outdoorMaxC = e.outdoorMaxC, initialC = e.initialC, durationH = e.durationH)
+        }
 
     /**
      * Réécrit les identifiants d'une modification de scénario après import. Une liste vide signifie « tout »

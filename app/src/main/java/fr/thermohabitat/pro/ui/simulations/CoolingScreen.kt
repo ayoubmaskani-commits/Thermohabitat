@@ -134,6 +134,8 @@ class CoolingViewModel @Inject constructor(
 
     val measurements = MutableStateFlow<List<MeasuredPoint>>(emptyList())
     val calibration = MutableStateFlow<CalibrationResult?>(null)
+    /** Série rechargée enregistrée sans ses conditions (version antérieure) : à vérifier avant le calage. */
+    val conditionsUnknown = MutableStateFlow(false)
     @OptIn(ExperimentalCoroutinesApi::class)
     val savedSeries = project.map { it?.project?.id }.distinctUntilChanged().flatMapLatest { id ->
         if (id == null) flowOf(emptyList()) else repository.observeMeasurements(id)
@@ -188,15 +190,28 @@ class CoolingViewModel @Inject constructor(
         val o = options.value
         repository.saveMeasurements(
             MeasurementSeriesEntity(buildingId = p.project.id, name = name.ifBlank { "Mesures" }, roomId = if (o.multizone) o.roomId else null,
-                outdoorC = if (o.dailyOutdoor) null else o.outdoorC, startClockHour = o.startHour),
+                outdoorC = if (o.dailyOutdoor) null else o.outdoorC,
+                outdoorMinC = if (o.dailyOutdoor) o.outdoorMinC else null, outdoorMaxC = if (o.dailyOutdoor) o.outdoorMaxC else null,
+                initialC = o.initialC, durationH = o.durationH, startClockHour = o.startHour),
             measurements.value,
         )
     }
 
     fun loadSeries(e: MeasurementSeriesEntity, points: List<MeasuredPoint>) {
         measurements.value = points
-        update { it.copy(startHour = e.startClockHour, outdoorC = e.outdoorC ?: it.outdoorC, dailyOutdoor = e.outdoorC == null && it.dailyOutdoor,
-            roomId = e.roomId, multizone = e.roomId != null, durationH = maxOf(it.durationH, points.maxOfOrNull { p -> p.timeH } ?: 0.0)) }
+        // Les conditions de la mesure sont rétablies pour que le calage porte sur les bonnes hypothèses.
+        val daily = e.outdoorMinC != null && e.outdoorMaxC != null
+        update { it.copy(
+            startHour = e.startClockHour,
+            dailyOutdoor = if (daily) true else if (e.outdoorC != null) false else it.dailyOutdoor,
+            outdoorC = e.outdoorC ?: it.outdoorC,
+            outdoorMinC = e.outdoorMinC ?: it.outdoorMinC,
+            outdoorMaxC = e.outdoorMaxC ?: it.outdoorMaxC,
+            initialC = e.initialC ?: points.firstOrNull { p -> p.timeH <= 0.01 }?.tempC ?: it.initialC,
+            roomId = e.roomId, multizone = e.roomId != null,
+            durationH = maxOf(e.durationH ?: it.durationH, points.maxOfOrNull { p -> p.timeH } ?: 0.0),
+        ) }
+        conditionsUnknown.value = e.initialC == null
     }
 
     fun deleteSeries(id: Long) = viewModelScope.launch { repository.deleteMeasurements(id) }
@@ -210,6 +225,7 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
     val measurements by vm.measurements.collectAsStateWithLifecycle()
     val calibration by vm.calibration.collectAsStateWithLifecycle()
     val saved by vm.savedSeries.collectAsStateWithLifecycle()
+    val conditionsUnknown by vm.conditionsUnknown.collectAsStateWithLifecycle()
     var addPoint by remember { mutableStateOf(false) }
     var seriesName by remember { mutableStateOf("") }
 
@@ -287,6 +303,10 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
             SectionCard("Calage sur des températures mesurées", icon = Icons.Filled.Science,
                 subtitle = "Relevez la température intérieure pendant une nuit chauffage coupé (heures écoulées depuis le début)") {
                 if (measurements.isEmpty()) Text("Aucune mesure saisie.", style = MaterialTheme.typography.bodySmall)
+                if (conditionsUnknown && measurements.isNotEmpty()) {
+                    InfoBanner("Conditions de cette série non enregistrées (version antérieure) : vérifiez la température initiale et " +
+                        "l'extérieur ci-dessus avant le calage.", kind = BannerKind.WARNING)
+                }
                 measurements.forEach { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("t = ${Fmt.num(p.timeH, 1)} h (${label(p.timeH)}) : ${Fmt.temp(p.tempC)}", Modifier.weight(1f))

@@ -2,6 +2,8 @@ package fr.thermohabitat.pro.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Base de données locale de l'application (aucune synchronisation distante).
@@ -21,7 +23,7 @@ import androidx.room.RoomDatabase
         ScenarioEntity::class,
         MeasurementSeriesEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,5 +39,13 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "thermohabitat.db"
+
+        /** v2 : conditions d'une série de mesures (extérieur variable, température initiale, durée). */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                listOf("outdoorMinC", "outdoorMaxC", "initialC", "durationH")
+                    .forEach { db.execSQL("ALTER TABLE measurement_series ADD COLUMN $it REAL") }
+            }
+        }
     }
 }

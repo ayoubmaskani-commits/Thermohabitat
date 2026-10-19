@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,12 +54,16 @@ fun NumberField(
     max: Double? = null,
 ) {
     var text by remember { mutableStateOf(value.toEditable(decimals)) }
-    LaunchedEffect(value) {
+    var focused by remember { mutableStateOf(false) }
+    // Valeurs transmises par ce champ pendant la saisie : leur retour tardif (recalcul, base) n'écrase pas le texte.
+    val sent = remember { mutableListOf<Double?>() }
+    fun close(a: Double?, b: Double?) = (a == null && b == null) ||
+        (a != null && b != null && kotlin.math.abs(a - b) <= 1e-7 * maxOf(1.0, kotlin.math.abs(b)))
+    LaunchedEffect(value, focused) {
+        if (!focused) sent.clear()
+        else if (sent.any { close(it, value) }) return@LaunchedEffect
         // Ne réécrit le texte que si la valeur externe diffère réellement (évite de perdre « 16, » en cours de saisie).
-        val parsed = Fmt.parse(text)
-        val same = (parsed == null && value == null) ||
-            (parsed != null && value != null && kotlin.math.abs(parsed - value) <= 1e-7 * maxOf(1.0, kotlin.math.abs(value)))
-        if (!same) text = value.toEditable(decimals)
+        if (!close(Fmt.parse(text), value)) text = value.toEditable(decimals)
     }
     val parsed = Fmt.parse(text)
     val outOfRange = parsed != null && ((min != null && parsed < min) || (max != null && parsed > max))
@@ -69,8 +74,8 @@ fun NumberField(
             text = t
             val p = Fmt.parse(t)
             when {
-                p != null && (min == null || p >= min) && (max == null || p <= max) -> onValueChange(p)
-                t.isBlank() && nullable -> onValueChange(null)
+                p != null && (min == null || p >= min) && (max == null || p <= max) -> { if (focused) sent += p; onValueChange(p) }
+                t.isBlank() && nullable -> { if (focused) sent += null; onValueChange(null) }
             }
         },
         label = { Text(label) },
@@ -85,7 +90,7 @@ fun NumberField(
             else -> null
         },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
     )
 }
 
@@ -130,16 +135,22 @@ fun TextInput(
     supportingText: String? = null,
 ) {
     var text by remember { mutableStateOf(value) }
-    LaunchedEffect(value) { if (value != text) text = value }
+    var focused by remember { mutableStateOf(false) }
+    // Textes transmis pendant la saisie : leur retour tardif n'écrase pas les caractères tapés depuis.
+    val sent = remember { mutableListOf<String>() }
+    LaunchedEffect(value, focused) {
+        if (!focused) sent.clear() else if (value in sent) return@LaunchedEffect
+        if (value != text) text = value
+    }
     OutlinedTextField(
         value = text,
-        onValueChange = { text = it; onValueChange(it) },
+        onValueChange = { text = it; if (focused) sent += it; onValueChange(it) },
         label = { Text(label) },
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
         supportingText = supportingText?.let { { Text(it) } },
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = if (singleLine) ImeAction.Next else ImeAction.Default),
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
     )
 }
 

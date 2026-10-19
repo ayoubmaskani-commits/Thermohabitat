@@ -88,17 +88,27 @@ class PhotoEditViewModel @Inject constructor(
 
     fun save(rect: androidx.compose.ui.geometry.Rect, onDone: () -> Unit) = viewModelScope.launch {
         val b = bitmap.value ?: return@launch
-        val name = fileName ?: return@launch
+        val oldName = fileName ?: return@launch
+        if (saving.value) return@launch
         saving.value = true
+        // Nouveau fichier : le cache d'images est indexé par le chemin, réécrire le même fichier laisserait
+        // les vignettes afficher l'image d'origine.
+        val prefix = oldName.substringBefore('_').substringBefore('.').ifBlank { "photo" }
+        val newFile = storage.newPhotoFile(prefix)
         withContext(Dispatchers.Default) {
             val l = rect.left.toInt().coerceIn(0, b.width - 1); val t = rect.top.toInt().coerceIn(0, b.height - 1)
             val w = (rect.width.toInt()).coerceIn(1, b.width - l); val h = (rect.height.toInt()).coerceIn(1, b.height - t)
             val cropped = Bitmap.createBitmap(b, l, t, w, h)
-            storage.saveBitmap(cropped, name)
+            storage.saveBitmap(cropped, newFile.name)
         }
-        repository.getPhoto(photoId)?.let { p ->
-            val (w, h) = storage.dimensions(name)
-            repository.updatePhoto(p.copy(width = w, height = h))
+        val p = repository.getPhoto(photoId)
+        if (p != null) {
+            val (w, h) = storage.dimensions(newFile.name)
+            repository.updatePhoto(p.copy(fileName = newFile.name, width = w, height = h))
+            storage.delete(oldName)
+            fileName = newFile.name
+        } else {
+            storage.delete(newFile.name) // photo supprimée entre-temps : pas de fichier orphelin
         }
         saving.value = false
         onDone()
@@ -159,11 +169,19 @@ class ElementCountViewModel @Inject constructor(
     }
 
     /** Reporte le nombre proposé sur la fiche (qui repasse « à valider »). */
-    fun apply(count: Int, confidence: Double, onDone: () -> Unit) = viewModelScope.launch {
-        val r = repository.getRadiator(route.radiatorId) ?: return@launch
-        repository.updateRadiator(r.copy(sections = count, identificationConfidence = confidence, validated = false,
-            updatedAt = System.currentTimeMillis()))
-        onDone()
+    /** Évite un double report (double appui) qui fermerait aussi la fiche radiateur. */
+    private var applying = false
+
+    fun apply(count: Int, confidence: Double, onDone: () -> Unit) {
+        if (applying) return
+        applying = true
+        viewModelScope.launch {
+            val r = repository.getRadiator(route.radiatorId)
+            if (r == null) { applying = false; return@launch }
+            repository.updateRadiator(r.copy(sections = count, identificationConfidence = confidence, validated = false,
+                updatedAt = System.currentTimeMillis()))
+            onDone() // applying reste vrai : l'écran se ferme
+        }
     }
 }
 
@@ -242,16 +260,23 @@ class MeasureViewModel @Inject constructor(
         }
     }
 
-    fun apply(target: MeasureTarget, valueMm: Double, onDone: () -> Unit) = viewModelScope.launch {
-        val r = repository.getRadiator(route.radiatorId) ?: return@launch
-        val v = Math.round(valueMm).toDouble()
-        val updated = when (target) {
-            MeasureTarget.HEIGHT -> r.copy(heightMm = v)
-            MeasureTarget.LENGTH -> r.copy(lengthMm = v)
-            MeasureTarget.DEPTH -> r.copy(depthMm = v)
-        }.copy(dimensionsOrigin = ValueOrigin.ESTIMATED, validated = false, updatedAt = System.currentTimeMillis())
-        repository.updateRadiator(updated)
-        onDone()
+    private var applying = false
+
+    fun apply(target: MeasureTarget, valueMm: Double, onDone: () -> Unit) {
+        if (applying) return
+        applying = true
+        viewModelScope.launch {
+            val r = repository.getRadiator(route.radiatorId)
+            if (r == null) { applying = false; return@launch }
+            val v = Math.round(valueMm).toDouble()
+            val updated = when (target) {
+                MeasureTarget.HEIGHT -> r.copy(heightMm = v)
+                MeasureTarget.LENGTH -> r.copy(lengthMm = v)
+                MeasureTarget.DEPTH -> r.copy(depthMm = v)
+            }.copy(dimensionsOrigin = ValueOrigin.ESTIMATED, validated = false, updatedAt = System.currentTimeMillis())
+            repository.updateRadiator(updated)
+            onDone()
+        }
     }
 }
 
