@@ -37,16 +37,34 @@ data class ElementCountResult(
     /** Positions (px, dans la zone analysée) des limites d'éléments estimées, pour contrôle visuel. */
     val boundariesPx: List<Double>,
     val message: String,
+    /** Autres nombres plausibles (harmonique du motif, bord douteux), du plus au moins probable. */
+    val alternatives: List<CountAlternative> = emptyList(),
+    /** Vrai si un bord du radiateur est douteux : le nombre peut être faux d'une unité. */
+    val plusOrMinusOne: Boolean = false,
+    /** Bord gauche du radiateur estimé (px de la zone analysée ; négatif si le contour coupe le 1er élément). */
+    val startPx: Double? = null,
+    /** Bord droit du radiateur estimé (px de la zone analysée). */
+    val endPx: Double? = null,
+    /** Nombre de cycles du motif sur la largeur analysée (analyse spectrale), pour contrôle. */
+    val spectralCycles: Double? = null,
+    /** Nombre de joints détectés (dont interpolés). */
+    val jointsDetected: Int = 0,
 ) {
     val reliable: Boolean get() = count != null && confidence >= ElementCounter.RELIABLE_CONFIDENCE
 }
 
+/** Nombre d'éléments alternatif et sa justification (score relatif 0–1 par rapport à la proposition). */
+data class CountAlternative(val count: Int, val reason: String, val score: Double)
+
+/** Rectangle (px de l'image analysée) à ignorer, p. ex. l'objet de référence posé sur la façade. */
+data class PixelRect(val left: Double, val top: Double, val right: Double, val bottom: Double)
+
 /**
- * Comptage assisté des éléments d'un radiateur à éléments sur une photo de FACE.
+ * Comptage assisté des éléments d'un radiateur à éléments.
  *
- * Méthode (traitement du signal, sans apprentissage) : profil de luminance moyen par colonne
- * sur la partie centrale du radiateur, suppression de la tendance (éclairage), puis recherche
- * de la période dominante par autocorrélation. Le nombre d'éléments vaut largeur / période.
+ * - [count] (outil historique) : zone rectangulaire d'une photo de FACE ; profil de luminance moyen par colonne,
+ *   suppression de la tendance (éclairage), période dominante par autocorrélation, nombre = largeur / période.
+ * - [countRectified] : façade redressée depuis une photo éventuellement prise de biais (voir [PhotoIdentifier]).
  *
  * Le résultat n'est qu'une proposition : il est affiché avec son indice de confiance et les
  * limites détectées superposées à la photo, et doit être confirmé par l'utilisateur.
@@ -109,6 +127,33 @@ object ElementCounter {
             "Périodicité faible : $count éléments proposés avec prudence. Vérifiez et corrigez si nécessaire."
         }
         return ElementCountResult(count, period, confidence, boundaries, msg)
+    }
+
+    /** Rapport pas / hauteur plausible des radiateurs à éléments (a priori de pas sans échelle métrique). */
+    val DEFAULT_PITCH_TO_HEIGHT: ClosedFloatingPointRange<Double> get() = RectifiedCounting.DEFAULT_PITCH_TO_HEIGHT
+
+    /**
+     * Comptage sur une façade REDRESSÉE (voir [PlaneRectifier.rectify]) : profils gradient + luminance, recherche
+     * spectrale fine, gestion des harmoniques par un a priori de pas, comptage des joints et examen des bords.
+     *
+     * @param face image redressée du corps du radiateur (éléments verticaux équidistants)
+     * @param pitchPriorPx plage de pas plausible en px redressés (déduite de l'échelle), sinon
+     *   [DEFAULT_PITCH_TO_HEIGHT] × hauteur de l'image
+     * @param excluded zones à ignorer (objet de référence posé sur la façade)
+     * @return nombre proposé, alternatives, limites (bords + joints, px redressés) et confiance
+     */
+    fun countRectified(
+        face: GrayImage,
+        pitchPriorPx: ClosedFloatingPointRange<Double>? = null,
+        minElements: Int = 3,
+        maxElements: Int = 60,
+        excluded: List<PixelRect> = emptyList(),
+    ): ElementCountResult = RectifiedCounting.count(face, pitchPriorPx, minElements, maxElements, excluded)
+
+    /** Limites régulières de [count] éléments entre [startPx] et [endPx] (nombre corrigé par l'utilisateur). */
+    fun evenBoundaries(count: Int, startPx: Double, endPx: Double): List<Double> {
+        require(count >= 1) { "Nombre d'éléments invalide" }
+        return List(count + 1) { startPx + (endPx - startPx) * it / count }
     }
 
     private fun detrend(p: DoubleArray, window: Int): DoubleArray {
