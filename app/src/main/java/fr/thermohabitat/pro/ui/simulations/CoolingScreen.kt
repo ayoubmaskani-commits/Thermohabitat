@@ -3,6 +3,10 @@ package fr.thermohabitat.pro.ui.simulations
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Add
@@ -10,6 +14,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,6 +44,8 @@ import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChartPalette
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.EmptyState
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.LineChart
 import fr.thermohabitat.pro.ui.components.LineSeries
@@ -49,6 +56,10 @@ import fr.thermohabitat.pro.ui.components.SectionCard
 import fr.thermohabitat.pro.ui.components.SwitchRow
 import fr.thermohabitat.pro.ui.components.TextInput
 import fr.thermohabitat.pro.ui.components.ValueRow
+import fr.thermohabitat.pro.ui.navigation.HomeRoute
+import fr.thermohabitat.pro.ui.navigation.HouseRoute
+import fr.thermohabitat.pro.ui.navigation.RadiatorsRoute
+import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.StudySettings
 import fr.thermohabitat.thermal.calc.CoverageAnalyzer
@@ -82,6 +93,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import kotlin.math.roundToLong
 
 data class CoolingOptions(
     val startHour: Double = 22.0,
@@ -118,6 +130,21 @@ data class CoolingData(
     val scenarioTimeConstantH: Double?,
 )
 
+/** Ce qui manque pour simuler : affiché à la place d'un écran vide. */
+enum class CoolingInput { NO_STUDY, NO_ROOMS, READY }
+
+/** Heure d'horloge [startHour] + [elapsedH], arrondie à la minute : « 23 h 20 », ou « 23h20 » ([compact], axe du graphique). */
+private fun coolingClock(startHour: Double, elapsedH: Double, compact: Boolean = false): String {
+    val total = ((startHour + elapsedH) * 60.0).roundToLong().mod(1440L)
+    val h = total / 60
+    val m = (total % 60).toString().padStart(2, '0')
+    return when {
+        compact -> if (m == "00") "${h}h" else "${h}h$m"
+        m == "00" -> "$h h"
+        else -> "$h h $m"
+    }
+}
+
 @HiltViewModel
 class CoolingViewModel @Inject constructor(
     studyService: StudyService,
@@ -125,7 +152,23 @@ class CoolingViewModel @Inject constructor(
 ) : ViewModel() {
     val options = MutableStateFlow(CoolingOptions())
     private val simulator = RcSimulator()
-    private val project = studyService.observeActive().stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    /** Étude active enveloppée : null pendant le chargement, [Active.project] null s'il n'y a aucune étude. */
+    private class Active(val project: AnalyzedProject?)
+    private val active = studyService.observeActive().map { Active(it) }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    private val project = active.map { it?.project }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Étude ou pièces manquantes (null pendant le chargement), pour guider l'utilisateur au lieu d'un écran vide. */
+    val input = active.map { a ->
+        when {
+            a == null -> null
+            a.project == null -> CoolingInput.NO_STUDY
+            a.project.project.building.rooms.isEmpty() -> CoolingInput.NO_ROOMS
+            else -> CoolingInput.READY
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Vrai si le dernier calcul a échoué (paramètres incohérents) : signalé au lieu d'un écran vide. */
+    val failed = MutableStateFlow(false)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val scenarios = project.map { it?.project?.id }.distinctUntilChanged().flatMapLatest { id ->
@@ -142,7 +185,8 @@ class CoolingViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val data = combine(project, options, scenarios) { p, o, sc ->
-        if (p == null || p.project.building.rooms.isEmpty()) null else runCatching { compute(p, o, sc) }.getOrNull()
+        if (p == null || p.project.building.rooms.isEmpty()) null
+        else runCatching { compute(p, o, sc) }.also { failed.value = it.isFailure }.getOrNull()
     }
         .flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -226,22 +270,39 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
     val calibration by vm.calibration.collectAsStateWithLifecycle()
     val saved by vm.savedSeries.collectAsStateWithLifecycle()
     val conditionsUnknown by vm.conditionsUnknown.collectAsStateWithLifecycle()
+    val input by vm.input.collectAsStateWithLifecycle()
+    val failed by vm.failed.collectAsStateWithLifecycle()
     var addPoint by remember { mutableStateOf(false) }
     var seriesName by remember { mutableStateOf("") }
 
     ScreenScaffold(title = "Simulation dynamique", onBack = { nav.popBackStack() }) { padding ->
         ScrollColumn(padding) {
-            SectionCard("Conditions simulées", icon = Icons.Filled.AcUnit) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Heure de début", o.startHour, { v -> v?.let { vm.update { x -> x.copy(startHour = it % 24) } } }, Modifier.weight(1f), unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
-                    NumberField("Durée", o.durationH, { v -> v?.let { vm.update { x -> x.copy(durationH = it) } } }, Modifier.weight(1f), unit = "h", decimals = 0, nullable = false, min = 1.0, max = 168.0)
+            // Sans étude ou sans pièce, rien n'est simulable : on guide vers la saisie au lieu d'un formulaire sans résultat.
+            when (input) {
+                CoolingInput.NO_STUDY -> {
+                    EmptyState("Aucune étude ouverte", "Ouvrez ou créez une étude depuis l'accueil pour simuler le refroidissement du logement.",
+                        actionLabel = "Aller à l'accueil", onAction = { nav.navigateToTab(HomeRoute) })
+                    return@ScrollColumn
                 }
-                NumberField("Température intérieure initiale", o.initialC, { v -> v?.let { vm.update { x -> x.copy(initialC = it) } } }, unit = "°C", decimals = 1, nullable = false, min = 0.0, max = 35.0)
+                CoolingInput.NO_ROOMS -> {
+                    EmptyState("Aucune pièce à simuler", "La simulation a besoin des pièces et de leurs parois : saisissez-les dans l'onglet Maison.",
+                        actionLabel = "Saisir la maison", onAction = { nav.navigateToTab(HouseRoute) })
+                    return@ScrollColumn
+                }
+                else -> Unit
+            }
+            SectionCard("Conditions simulées", icon = Icons.Filled.AcUnit) {
+                FieldRow {
+                    NumberField("Heure de début", o.startHour, { v -> v?.let { vm.update { x -> x.copy(startHour = it % 24) } } }, unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
+                    NumberField("Durée", o.durationH, { v -> v?.let { vm.update { x -> x.copy(durationH = it) } } }, unit = "h", decimals = 0, nullable = false, min = 1.0, max = 168.0)
+                }
+                NumberField("Température initiale", o.initialC, { v -> v?.let { vm.update { x -> x.copy(initialC = it) } } }, unit = "°C", decimals = 1, nullable = false, min = 0.0, max = 35.0,
+                    supportingText = "Air intérieur au début de la simulation")
                 ChoiceChips(listOf(false, true), o.dailyOutdoor, { if (it) "Extérieur variable (jour/nuit)" else "Extérieur constant" }, { v -> vm.update { it.copy(dailyOutdoor = v) } })
                 if (o.dailyOutdoor) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField("Minimum (6 h)", o.outdoorMinC, { v -> v?.let { vm.update { x -> x.copy(outdoorMinC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 1, nullable = false)
-                        NumberField("Maximum (18 h)", o.outdoorMaxC, { v -> v?.let { vm.update { x -> x.copy(outdoorMaxC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 1, nullable = false)
+                    FieldRow {
+                        NumberField("Minimum (6 h)", o.outdoorMinC, { v -> v?.let { vm.update { x -> x.copy(outdoorMinC = it) } } }, unit = "°C", decimals = 1, nullable = false)
+                        NumberField("Maximum (18 h)", o.outdoorMaxC, { v -> v?.let { vm.update { x -> x.copy(outdoorMaxC = it) } } }, unit = "°C", decimals = 1, nullable = false)
                     }
                 } else {
                     NumberField("Température extérieure", o.outdoorC, { v -> v?.let { vm.update { x -> x.copy(outdoorC = it) } } }, unit = "°C", decimals = 1, nullable = false, min = -40.0, max = 40.0)
@@ -249,9 +310,14 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                 SwitchRow("Programmation du chauffage", o.heatingSchedule, { v -> vm.update { it.copy(heatingSchedule = v) } },
                     description = if (o.heatingSchedule) "Chauffage actif de ${Fmt.num(o.heatOnHour, 0)} h à ${Fmt.num(o.heatOffHour, 0)} h (puissance des radiateurs au régime d'étude)" else "Chauffage coupé pendant toute la simulation")
                 if (o.heatingSchedule) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField("Marche", o.heatOnHour, { v -> v?.let { vm.update { x -> x.copy(heatOnHour = it) } } }, Modifier.weight(1f), unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
-                        NumberField("Arrêt", o.heatOffHour, { v -> v?.let { vm.update { x -> x.copy(heatOffHour = it) } } }, Modifier.weight(1f), unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
+                    FieldRow {
+                        NumberField("Marche", o.heatOnHour, { v -> v?.let { vm.update { x -> x.copy(heatOnHour = it) } } }, unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
+                        NumberField("Arrêt", o.heatOffHour, { v -> v?.let { vm.update { x -> x.copy(heatOffHour = it) } } }, unit = "h", decimals = 1, nullable = false, min = 0.0, max = 24.0)
+                    }
+                    // Sans radiateur validé, la programmation n'apporte aucune puissance : la courbe baisserait sans explication.
+                    if (data?.model?.zones?.sumOf { it.maxHeatingW }?.let { it <= 0.0 } == true) {
+                        InfoBanner("Aucun radiateur validé : la programmation n'apporte aucune puissance dans la simulation.", kind = BannerKind.WARNING)
+                        TextButton(onClick = { nav.navigateToTab(RadiatorsRoute) }) { Text("Valider les radiateurs") }
                     }
                 }
                 DropdownField("Apports solaires", SolarProfile.entries, o.solar, { it.label }, { v -> vm.update { it.copy(solar = v) } })
@@ -265,32 +331,63 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                 SwitchRow("Afficher la bande d'incertitude", o.band, { v -> vm.update { it.copy(band = v) } })
             }
 
-            val d = data ?: return@ScrollColumn
+            val d = data
+            if (d == null) {
+                // Calcul en cours ou en échec : jamais d'écran vide sous le formulaire.
+                if (failed) InfoBanner("Simulation impossible avec ces paramètres : vérifiez la durée, les heures et les températures.", kind = BannerKind.WARNING)
+                else Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text("Calcul en cours…", style = MaterialTheme.typography.bodyMedium)
+                }
+                return@ScrollColumn
+            }
             val sim = d.simulation.nominal
-            val label: (Double) -> String = { x -> "${((o.startHour + x) % 24).toInt()} h" }
+            // Heures exactes (à la minute) : les graduations tombent toutes les 1 h 20 sur 8 h, l'arrondi à l'heure les faussait.
+            val clock: (Double) -> String = { x -> coolingClock(o.startHour, x) }
+            val axisLabel: (Double) -> String = { x -> coolingClock(o.startHour, x, compact = true) }
             SectionCard("Évolution des températures") {
                 val series = mutableListOf<LineSeries>()
                 val shown = if (o.multizone && o.roomId != null) sim.zones.filter { it.zoneId == o.roomId } else sim.zones
-                shown.take(6).forEachIndexed { i, z ->
-                    series += LineSeries(z.name + if (d.scenario != null) " (actuel)" else "", sim.timesH, z.airTempC, ChartPalette[i % ChartPalette.size],
-                        low = if (o.band) d.simulation.lowAir[z.zoneId] else null, high = if (o.band) d.simulation.highAir[z.zoneId] else null)
-                }
-                d.scenarioResult?.let { r ->
-                    val sz = if (o.multizone && o.roomId != null) r.zones.filter { it.zoneId == o.roomId } else r.zones
-                    sz.take(6).forEachIndexed { i, z -> series += LineSeries("${z.name} (${d.scenario?.name})", r.timesH, z.airTempC, ChartPalette[(i + 3) % ChartPalette.size], dashed = true) }
+                // Toutes les pièces avec un scénario : au plus 3 paires de courbes, sans bande, pour rester lisible.
+                val crowded = o.multizone && o.roomId == null && d.scenarioResult != null
+                val plotted = shown.take(if (crowded) 3 else 6)
+                val band = o.band && !crowded
+                plotted.forEachIndexed { i, z ->
+                    // Une couleur par pièce : trait plein pour l'état actuel, pointillé de même couleur pour le scénario.
+                    val color = ChartPalette[i % ChartPalette.size]
+                    series += LineSeries(z.name + if (d.scenario != null) " (actuel)" else "", sim.timesH, z.airTempC, color,
+                        low = if (band) d.simulation.lowAir[z.zoneId] else null, high = if (band) d.simulation.highAir[z.zoneId] else null)
+                    d.scenarioResult?.let { r ->
+                        r.zone(z.zoneId)?.let { sz -> series += LineSeries("${z.name} (scénario)", r.timesH, sz.airTempC, color, dashed = true) }
+                    }
                 }
                 series += LineSeries("Extérieur", sim.timesH, sim.outdoorC, MaterialTheme.colorScheme.outline, dashed = true)
-                if (measurements.isNotEmpty()) series += LineSeries("Mesures", measurements.map { it.timeH }, measurements.map { it.tempC }, ChartPalette[4], pointsOnly = true)
+                // Couleurs neutres, distinctes de celles des pièces.
+                if (measurements.isNotEmpty()) series += LineSeries("Mesures", measurements.map { it.timeH }, measurements.map { it.tempC }, MaterialTheme.colorScheme.onSurface, pointsOnly = true)
                 calibration?.let { c ->
                     val rid = o.roomId
                     val z = if (o.multizone && rid != null) c.calibrated.zone(rid) else c.calibrated.zones.firstOrNull()
-                    z?.let { series += LineSeries("Modèle calé", c.calibrated.timesH, it.airTempC, ChartPalette[2]) }
+                    z?.let { series += LineSeries("Modèle calé", c.calibrated.timesH, it.airTempC, MaterialTheme.colorScheme.tertiary) }
                 }
-                LineChart(series, xLabel = label, height = 280.dp)
+                d.scenario?.let { Text("Pointillés : scénario « ${it.name} »", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                LineChart(series, xLabel = axisLabel, height = 280.dp)
+                val limited = shown.size > plotted.size
+                val bandHidden = crowded && o.band
+                if (limited || bandHidden) {
+                    Text(
+                        when {
+                            limited && bandHidden -> "Seules ${plotted.size} pièces sont tracées, sans bande d'incertitude : choisissez une pièce pour la voir en détail."
+                            limited -> "Seules les ${plotted.size} premières pièces sont tracées : choisissez une pièce pour la voir en détail."
+                            else -> "Bande d'incertitude masquée pour comparer toutes les pièces : choisissez une pièce pour l'afficher."
+                        },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 HorizontalDivider()
                 shown.forEach { z ->
                     val after = d.scenarioResult?.zone(z.zoneId)?.airTempC?.lastOrNull()
-                    ValueRow("${z.name} à ${label(sim.timesH.last())}", Fmt.temp(z.airTempC.last()) + (after?.let { " → ${Fmt.temp(it)} (scénario)" } ?: ""))
+                    ValueRow("${z.name} à ${clock(sim.timesH.last())}", Fmt.temp(z.airTempC.last()) + (after?.let { " → ${Fmt.temp(it)} (scénario)" } ?: ""))
                 }
                 val zones = d.model.zones
                 val tau = zones.sumOf { it.totalCapacityJk } / zones.sumOf { it.steadyStateHWk }.coerceAtLeast(1e-9) / 3600.0
@@ -309,13 +406,18 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                 }
                 measurements.forEach { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("t = ${Fmt.num(p.timeH, 1)} h (${label(p.timeH)}) : ${Fmt.temp(p.tempC)}", Modifier.weight(1f))
+                        Text("t = ${Fmt.num(p.timeH, 1)} h (${clock(p.timeH)}) : ${Fmt.temp(p.tempC)}", Modifier.weight(1f))
                         IconButton(onClick = { vm.removeMeasurement(p) }) { Icon(Icons.Filled.Delete, "Supprimer") }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { addPoint = true }) { Icon(Icons.Filled.Add, null); Text(" Mesure") }
-                    Button(enabled = measurements.size >= 2, onClick = { vm.calibrate() }) { Text("Caler le modèle") }
+                // Boutons pleine largeur empilés : avec une grande police, côte à côte, « Caler le modèle » passait sur 3 lignes.
+                OutlinedButton(onClick = { addPoint = true }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Ajouter une mesure")
+                }
+                Button(onClick = { vm.calibrate() }, Modifier.fillMaxWidth(), enabled = measurements.size >= 2) { Text("Caler le modèle") }
+                if (measurements.size < 2) {
+                    Text("Saisissez au moins 2 mesures pour caler le modèle (6 pour caler aussi les déperditions).",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 calibration?.let { c ->
                     ValueRow("Facteur sur la capacité thermique", Fmt.num(c.capacityFactor, 2), emphasize = true)
@@ -327,11 +429,14 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                 }
                 if (measurements.isNotEmpty()) {
                     TextInput("Nom de la série", seriesName, { seriesName = it })
-                    OutlinedButton(onClick = { vm.saveSeries(seriesName) }) { Text("Enregistrer la série") }
+                    OutlinedButton(onClick = { vm.saveSeries(seriesName) }, Modifier.fillMaxWidth()) { Text("Enregistrer la série") }
                 }
                 saved.forEach { (e, pts) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("${e.name} · ${pts.size} mesures", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        Column(Modifier.weight(1f)) {
+                            Text(e.name, style = MaterialTheme.typography.bodyMedium)
+                            Text("${pts.size} mesures", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         TextButton(onClick = { vm.loadSeries(e, pts) }) { Text("Charger") }
                         IconButton(onClick = { vm.deleteSeries(e.id) }) { Icon(Icons.Filled.Delete, "Supprimer la série") }
                     }
@@ -347,8 +452,9 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
             title = { Text("Mesure de température") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Temps écoulé depuis ${Fmt.num(o.startHour, 0)} h", t, { t = it }, unit = "h", decimals = 2, min = 0.0, max = 168.0)
-                    NumberField("Température mesurée", temp, { temp = it }, unit = "°C", decimals = 1, min = -20.0, max = 40.0)
+                    NumberField("Temps écoulé", t, { t = it }, unit = "h", decimals = 2, min = 0.0, max = 168.0,
+                        supportingText = "Heures depuis le début (${coolingClock(o.startHour, 0.0)})")
+                    NumberField("Température", temp, { temp = it }, unit = "°C", decimals = 1, min = -20.0, max = 40.0)
                 }
             },
             confirmButton = { TextButton(enabled = t != null && temp != null, onClick = { vm.addMeasurement(t!!, temp!!); addPoint = false }) { Text("Ajouter") } },

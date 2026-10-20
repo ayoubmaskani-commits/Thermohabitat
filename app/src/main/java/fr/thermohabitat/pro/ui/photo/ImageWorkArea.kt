@@ -6,6 +6,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -48,6 +50,8 @@ data class ImageFrame(val left: Float, val top: Float, val scale: Float, val ima
 
 /**
  * Zone d'affichage d'une photo avec calque de dessin et gestes exprimés en coordonnées image.
+ * La hauteur suit le format de la photo (pas de bandes vides) et reste plafonnée à [height] et à 45 % de
+ * l'écran : la page garde de la place pour défiler, les glissés sur l'image servant aux outils.
  */
 @Composable
 fun ImageWorkArea(
@@ -62,26 +66,31 @@ fun ImageWorkArea(
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
     val frame = ImageFrame.of(viewSize, bitmap.width, bitmap.height)
-    Box(modifier.fillMaxWidth().height(height).onSizeChanged { viewSize = it }) {
-        Image(imageBitmap, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-        Canvas(
-            Modifier.fillMaxSize()
-                .pointerInput(bitmap, onTap) {
-                    if (onTap != null) detectTapGestures { pos -> onTap(ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height).toImage(pos)) }
-                }
-                .pointerInput(bitmap, onDrag) {
-                    if (onDrag != null) {
-                        val f = { ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height) }
-                        detectDragGestures(
-                            onDragStart = { pos -> onDragStart?.invoke(f().toImage(pos)) },
-                        ) { change, amount ->
-                            change.consume()
-                            val fr = f()
-                            onDrag(fr.toImage(change.position), Offset(amount.x / fr.scale, amount.y / fr.scale))
-                        }
+    val screenCap = LocalConfiguration.current.screenHeightDp.dp * 0.45f
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val ratio = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
+        val h = minOf(height, screenCap, maxWidth / ratio)
+        Box(Modifier.fillMaxWidth().height(h).onSizeChanged { viewSize = it }) {
+            Image(imageBitmap, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            Canvas(
+                Modifier.fillMaxSize()
+                    .pointerInput(bitmap, onTap) {
+                        if (onTap != null) detectTapGestures { pos -> onTap(ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height).toImage(pos)) }
                     }
-                },
-        ) { overlay(frame) }
+                    .pointerInput(bitmap, onDrag) {
+                        if (onDrag != null) {
+                            val f = { ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height) }
+                            detectDragGestures(
+                                onDragStart = { pos -> onDragStart?.invoke(f().toImage(pos)) },
+                            ) { change, amount ->
+                                change.consume()
+                                val fr = f()
+                                onDrag(fr.toImage(change.position), Offset(amount.x / fr.scale, amount.y / fr.scale))
+                            }
+                        }
+                    },
+            ) { overlay(frame) }
+        }
     }
 }
 
@@ -135,8 +144,12 @@ fun DrawScope.drawCrop(frame: ImageFrame, rect: Rect, accent: Color) {
     drawRect(shade, Offset(0f, r.bottom), Size(size.width, size.height - r.bottom))
     drawRect(shade, Offset(0f, r.top), Size(r.left, r.height))
     drawRect(shade, Offset(r.right, r.top), Size(size.width - r.right, r.height))
-    drawRect(accent, r.topLeft, r.size, style = Stroke(width = 3f))
-    listOf(r.topLeft, r.topRight, r.bottomLeft, r.bottomRight).forEach { drawCircle(accent, 14f, it) }
+    // Tailles en dp (et non en pixels bruts) : cadre et poignées bien visibles sur les écrans denses.
+    drawRect(accent, r.topLeft, r.size, style = Stroke(width = 2.dp.toPx()))
+    listOf(r.topLeft, r.topRight, r.bottomLeft, r.bottomRight).forEach {
+        drawCircle(accent, 10.dp.toPx(), it)
+        drawCircle(Color.White, 10.dp.toPx(), it, style = Stroke(width = 1.5.dp.toPx()))
+    }
 }
 
 /** Conversion d'une zone de Bitmap en image de luminance pour l'analyse embarquée. */

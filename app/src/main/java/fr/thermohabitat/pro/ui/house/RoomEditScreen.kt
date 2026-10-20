@@ -4,8 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.ViewColumn
@@ -51,10 +54,12 @@ import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.di.ApplicationScope
 import fr.thermohabitat.pro.domain.AnalyzedProject
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.ActionRow
 import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.ConfirmDialog
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
 import fr.thermohabitat.pro.ui.components.NumberField
@@ -190,13 +195,32 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
         val room = p?.project?.building?.room(r.id)
         val rl = p?.result?.heatLoss?.room(r.id)
         val cov = p?.result?.studyCoverage?.rooms?.firstOrNull { it.roomId == r.id }
+        val radiators = p?.project?.building?.radiatorsIn(r.id).orEmpty()
         ScrollColumn(padding) {
+            // Bilan en tête : le résultat cherché est visible sans faire défiler tout le formulaire.
+            if (rl != null) {
+                SectionCard("Bilan de la pièce", icon = Icons.Filled.LocalFireDepartment,
+                    subtitle = "Intérieur ${Fmt.temp(rl.setpointC)} · extérieur de base ${Fmt.temp(rl.designOutdoorC)}") {
+                    if (room?.surfaces.isNullOrEmpty()) {
+                        InfoBanner("Bilan incomplet : aucune paroi saisie (air seulement). Utilisez l'assistant de la section « Parois ».",
+                            kind = BannerKind.WARNING)
+                    }
+                    cov?.let { StatusChip(it.status) }
+                    ValueRow("Besoin de chauffage", "${Fmt.watts(rl.totalW)} · ${Fmt.num(rl.wattsPerM2, 0)} W/m²", emphasize = true)
+                    ValueRow("Radiateurs validés", if (radiators.isEmpty()) "Aucun radiateur" else Fmt.watts(cov?.availableW))
+                    cov?.pendingRadiators?.takeIf { it > 0 }?.let { n ->
+                        Text("$n radiateur(s) en attente de validation, non compté(s).", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
             SectionCard("Identification", icon = Icons.Filled.Thermostat) {
                 TextInput("Nom de la pièce", r.name, { v -> vm.update { it.copy(name = v) } })
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IntField("Niveau", r.floorLevel, { v -> v?.let { n -> vm.update { it.copy(floorLevel = n) } } }, Modifier.weight(1f), min = -3, max = 20, nullable = false,
+                FieldRow {
+                    IntField("Niveau", r.floorLevel, { v -> v?.let { n -> vm.update { it.copy(floorLevel = n) } } }, min = -3, max = 20, nullable = false,
                         supportingText = floorLabel(r.floorLevel))
-                    NumberField("Consigne", r.setpointC, { v -> vm.update { it.copy(setpointC = v ?: 20.0) } }, Modifier.weight(1f), unit = "°C",
+                    NumberField("Consigne", r.setpointC, { v -> vm.update { it.copy(setpointC = v ?: 20.0) } }, unit = "°C",
                         decimals = 1, nullable = false, min = 5.0, max = 30.0, supportingText = "Usuel : ${Fmt.temp(r.usage.usualSetpointC, 0)}")
                 }
                 DropdownField("Usage", RoomUsage.entries, r.usage, { it.label }, { v -> vm.update { it.copy(usage = v) } },
@@ -204,23 +228,24 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
             }
 
             SectionCard("Dimensions", icon = Icons.Filled.Straighten) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Longueur", r.lengthM, { v -> vm.update { it.copy(lengthM = v ?: it.lengthM) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.1, max = 100.0)
-                    NumberField("Largeur", r.widthM, { v -> vm.update { it.copy(widthM = v ?: it.widthM) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.1, max = 100.0)
-                    NumberField("Hauteur", r.heightM, { v -> vm.update { it.copy(heightM = v ?: it.heightM) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 1.0, max = 20.0)
+                FieldRow(minFieldWidth = 100.dp) {
+                    NumberField("Longueur", r.lengthM, { v -> vm.update { it.copy(lengthM = v ?: it.lengthM) } }, unit = "m", nullable = false, min = 0.1, max = 100.0)
+                    NumberField("Largeur", r.widthM, { v -> vm.update { it.copy(widthM = v ?: it.widthM) } }, unit = "m", nullable = false, min = 0.1, max = 100.0)
                 }
-                NumberField("Surface au sol imposée (pièce non rectangulaire)", r.floorAreaOverrideM2, { v -> vm.update { it.copy(floorAreaOverrideM2 = v) } },
-                    unit = "m²", decimals = 1, min = 0.1)
+                NumberField("Hauteur sous plafond", r.heightM, { v -> vm.update { it.copy(heightM = v ?: it.heightM) } }, unit = "m", nullable = false, min = 1.0, max = 20.0)
+                NumberField("Surface imposée", r.floorAreaOverrideM2, { v -> vm.update { it.copy(floorAreaOverrideM2 = v) } },
+                    unit = "m²", decimals = 1, min = 0.1, supportingText = "Pièce non rectangulaire. Vide = longueur × largeur")
                 val area = r.floorAreaOverrideM2 ?: (r.lengthM * r.widthM)
                 ValueRow("Surface au sol", Fmt.area(area), emphasize = true)
                 ValueRow("Volume", Fmt.volume(area * r.heightM), emphasize = true)
             }
 
             SectionCard("Ventilation et apports", icon = Icons.Filled.AutoAwesome) {
-                NumberField("Renouvellement minimal (vide = selon l'usage)", r.minAirChangeOverride, { v -> vm.update { it.copy(minAirChangeOverride = v) } },
-                    unit = "vol/h", decimals = 2, min = 0.0, max = 10.0)
-                NumberField("Apports internes moyens", r.internalGainsW, { v -> vm.update { it.copy(internalGainsW = v ?: 0.0) } }, unit = "W", decimals = 0,
-                    nullable = false, min = 0.0, supportingText = "Utilisés seulement dans la simulation dynamique (non déduits du dimensionnement)")
+                NumberField("Renouvellement d'air", r.minAirChangeOverride, { v -> vm.update { it.copy(minAirChangeOverride = v) } },
+                    unit = "vol/h", decimals = 2, min = 0.0, max = 10.0,
+                    supportingText = "Minimum imposé. Vide = selon l'usage (${Fmt.num(r.usage.minAirChangePerHour, 1)} vol/h)")
+                NumberField("Apports internes", r.internalGainsW, { v -> vm.update { it.copy(internalGainsW = v ?: 0.0) } }, unit = "W", decimals = 0,
+                    nullable = false, min = 0.0, supportingText = "Moyenne. Utilisés seulement dans la simulation dynamique (non déduits du dimensionnement)")
             }
 
             SectionCard(
@@ -241,8 +266,11 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
                             opaque?.let { OriginBadge(it.uOrigin) }
                         }
                         Text(
-                            "${s.kind.label} · ${s.boundary.label}${s.orientation?.let { " · " + it.label } ?: ""} · " +
-                                "${Fmt.area(opaque?.areaM2)} · U ${Fmt.num(opaque?.uValue, 2)} · ${s.openings.size} baie(s)",
+                            "${s.kind.label} · ${s.boundary.label}${s.orientation?.let { " · " + it.label } ?: ""}",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "${Fmt.area(opaque?.areaM2)} · U ${Fmt.num(opaque?.uValue, 2)}" + if (s.openings.isEmpty()) "" else " · ${s.openings.size} baie(s)",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text("Déperdition : ${Fmt.watts(elements.sumOf { it.powerW })}", style = MaterialTheme.typography.bodySmall)
@@ -267,29 +295,29 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
 
             SectionCard("Radiateurs de la pièce", icon = Icons.Filled.ViewColumn) {
                 val regime = p?.result?.studyCoverage
-                val radiators = p?.project?.building?.radiatorsIn(r.id).orEmpty()
                 if (radiators.isEmpty()) Text("Aucun radiateur associé.", style = MaterialTheme.typography.bodySmall)
                 radiators.forEach { rad ->
                     val out = regime?.let { fr.thermohabitat.thermal.calc.CoverageAnalyzer.outputFor(rad, it.supplyC, it.mode, r.setpointC) }
                     Row(Modifier.fillMaxWidth().clickable { nav.navigate(RadiatorEditRoute(rad.id)) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("${rad.code} · ${rad.label.ifBlank { rad.type.label }}", style = MaterialTheme.typography.bodyMedium)
-                            Text(if (rad.validated) "À ${regime?.supplyC?.toInt()} °C : ${Fmt.watts(out?.powerW)}" else "En attente de validation – non compté",
+                            Text(if (rad.validated) "À ${regime?.supplyC?.toInt() ?: "–"} °C : ${Fmt.watts(out?.powerW)}" else "En attente de validation – non compté",
                                 style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { scope.launch { vm.addRadiator()?.let { nav.navigate(RadiatorEditRoute(it)) } } }) { Text("Saisir") }
+                ActionRow {
+                    OutlinedButton(onClick = { scope.launch { vm.addRadiator()?.let { nav.navigate(RadiatorEditRoute(it)) } } }) {
+                        Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Saisir")
+                    }
                     OutlinedButton(onClick = {
                         scope.launch { vm.addRadiator()?.let { nav.navigate(CaptureRoute(PhotoOwner.RADIATOR.name, it, r.buildingId)) } }
-                    }) { Icon(Icons.Filled.CameraAlt, null); Text("  Scanner") }
+                    }) { Icon(Icons.Filled.CameraAlt, null); Spacer(Modifier.width(8.dp)); Text("Scanner") }
                 }
             }
 
             if (rl != null) {
-                SectionCard("Déperditions de la pièce", subtitle = "θint ${Fmt.temp(rl.setpointC)} · θe ${Fmt.temp(rl.designOutdoorC)}") {
-                    cov?.let { StatusChip(it.status, text = "${it.status.label} – ${Fmt.watts(it.availableW)} disponibles pour ${Fmt.watts(it.needW)}") }
+                SectionCard("Détail des déperditions", subtitle = "Répartition du besoin de la pièce par élément") {
                     rl.elements.forEach { e ->
                         ValueRow("${e.label} (${e.category.label.lowercase()})", Fmt.watts(e.powerW))
                     }
@@ -365,7 +393,7 @@ private fun SurfaceAssistantDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Murs donnant sur l'extérieur", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                ActionRow {
                     listOf(Orientation.N, Orientation.E, Orientation.S, Orientation.W).forEach { o ->
                         androidx.compose.material3.FilterChip(
                             selected = o in exterior,

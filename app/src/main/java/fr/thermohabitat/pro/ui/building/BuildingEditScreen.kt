@@ -1,7 +1,7 @@
 package fr.thermohabitat.pro.ui.building
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.House
@@ -11,13 +11,17 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -33,6 +37,7 @@ import fr.thermohabitat.pro.di.ApplicationScope
 import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
 import fr.thermohabitat.pro.ui.components.NumberField
@@ -133,7 +138,9 @@ class BuildingEditViewModel @Inject constructor(
 @Composable
 fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewModel()) {
     val form by vm.form.collectAsStateWithLifecycle()
-    ScreenScaffold(title = "Bâtiment", onBack = { nav.popBackStack() }) { padding ->
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    ScreenScaffold(title = "Bâtiment", onBack = { nav.popBackStack() }, snackbarHostState = snackbar) { padding ->
         val b = form ?: return@ScreenScaffold
         ScrollColumn(padding) {
             InfoBanner("Les modifications sont enregistrées automatiquement. Les valeurs proposées par l'application sont indicatives : elles ne remplacent pas des mesures.")
@@ -142,15 +149,16 @@ fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewM
                 TextInput("Nom du projet", b.name, { v -> vm.update { it.copy(name = v) } })
                 TextInput("Adresse (facultative)", b.address, { v -> vm.update { it.copy(address = v) } })
                 TextInput("Commune", b.commune, { v -> vm.update { it.copy(commune = v) } })
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    IntField("Année de construction", b.constructionYear, { v -> vm.update { it.copy(constructionYear = v) } }, Modifier.weight(1f), min = 1000, max = 2100)
-                    IntField("Nombre d'étages", b.floorsCount, { v -> v?.let { n -> vm.update { it.copy(floorsCount = n) } } }, Modifier.weight(1f), min = 1, max = 20, nullable = false)
+                // Côte à côte seulement si chaque champ garde une largeur lisible (sinon l'un sous l'autre).
+                FieldRow(minFieldWidth = 160.dp) {
+                    IntField("Année de construction", b.constructionYear, { v -> vm.update { it.copy(constructionYear = v) } }, min = 1000, max = 2100)
+                    IntField("Nombre d'étages", b.floorsCount, { v -> v?.let { n -> vm.update { it.copy(floorsCount = n) } } }, min = 1, max = 20, nullable = false)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NumberField("Surface habitable déclarée", b.declaredLivingAreaM2, { v -> vm.update { it.copy(declaredLivingAreaM2 = v) } },
-                        Modifier.weight(1f), unit = "m²", decimals = 1, min = 0.0)
+                FieldRow(minFieldWidth = 160.dp) {
+                    NumberField("Surface habitable", b.declaredLivingAreaM2, { v -> vm.update { it.copy(declaredLivingAreaM2 = v) } },
+                        unit = "m²", decimals = 1, min = 0.0, supportingText = "Déclarée, facultative : le calcul utilise les pièces")
                     NumberField("Hauteur sous plafond", b.ceilingHeightM, { v -> vm.update { it.copy(ceilingHeightM = v ?: 2.5) } },
-                        Modifier.weight(1f), unit = "m", nullable = false, min = 1.5, max = 10.0)
+                        unit = "m", nullable = false, min = 1.5, max = 10.0)
                 }
             }
 
@@ -160,29 +168,49 @@ fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewM
                 DropdownField("Isolation", InsulationType.entries, b.insulationType, { it.label }, { v -> vm.update { it.copy(insulationType = v) } })
                 DropdownField("Menuiseries", JoineryType.entries, b.joineryType, { it.label }, { v -> vm.update { it.copy(joineryType = v) } })
                 DropdownField("Chauffage existant", HeatingSystem.entries, b.existingHeating, { it.label }, { v -> vm.update { it.copy(existingHeating = v) } })
-                OutlinedButton(onClick = { vm.applyIndicativeDefaults() }) { Text("Proposer des valeurs indicatives (étanchéité, ponts thermiques)") }
+                OutlinedButton(
+                    onClick = {
+                        vm.applyIndicativeDefaults()
+                        // Les champs modifiés sont plus bas dans le formulaire : on indique ce qui a été appliqué.
+                        vm.form.value?.let { n ->
+                            val applied = buildList<String> {
+                                add("n50 ${Fmt.num(n.n50, 1)} h⁻¹")
+                                add("ponts thermiques ${Fmt.num(n.thermalBridgeDeltaU, 2)} W/(m²·K)")
+                                if (n.ceilingHeightM != b.ceilingHeightM) add("hauteur sous plafond ${Fmt.num(n.ceilingHeightM, 2)} m")
+                            }.joinToString(" · ")
+                            scope.launch {
+                                snackbar.showSnackbar("Valeurs estimées appliquées : $applied", withDismissAction = true, duration = SnackbarDuration.Long)
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Estimer l'étanchéité et les ponts thermiques selon l'époque", textAlign = TextAlign.Center)
+                }
             }
 
             SectionCard("Températures et climat", icon = Icons.Filled.WbSunny) {
-                NumberField("Température intérieure souhaitée", b.setpointC, { v -> vm.update { it.copy(setpointC = v ?: 20.0) } },
+                NumberField("Température intérieure", b.setpointC, { v -> vm.update { it.copy(setpointC = v ?: 20.0) } },
                     unit = "°C", decimals = 1, nullable = false, min = 10.0, max = 30.0,
-                    supportingText = "Valeur par défaut des nouvelles pièces")
+                    supportingText = "Consigne par défaut des nouvelles pièces")
                 NumberField("Altitude de la commune", b.altitudeM, { v -> vm.update { it.copy(altitudeM = v ?: 0.0) } }, unit = "m", decimals = 0, nullable = false, min = -10.0, max = 3000.0)
                 var city by remember { mutableStateOf<String?>(null) }
                 DropdownField(
                     "Station climatique de référence", ClimateReferences.all.map { it.city }, city ?: b.climateReference.substringBefore(" (").ifBlank { null },
-                    { c -> ClimateReferences.find(c)?.let { "${it.city} (${it.department}) – θb ${Fmt.num(it.designTempC, 0)} °C" } ?: c },
+                    { c -> ClimateReferences.find(c)?.let { "${it.city} (${it.department}) – base ${Fmt.num(it.designTempC, 0)} °C" } ?: c },
                     { c -> city = c; vm.applyClimate(c) },
                     supportingText = "Valeurs indicatives corrigées de l'altitude – à vérifier (NF EN 12831-1/CN, Météo-France)",
                 )
-                NumberField("Température extérieure de base θe", b.designOutdoorTempC, { v -> vm.update { it.copy(designOutdoorTempC = v ?: -7.0) } },
-                    unit = "°C", decimals = 1, nullable = false, min = -40.0, max = 15.0)
+                NumberField("Température extérieure de base", b.designOutdoorTempC, { v -> vm.update { it.copy(designOutdoorTempC = v ?: -7.0) } },
+                    unit = "°C", decimals = 1, nullable = false, min = -40.0, max = 15.0,
+                    supportingText = "θe : température la plus froide retenue pour dimensionner le chauffage")
+                Text("Origine de la température de base", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OriginSelector(b.designOutdoorOrigin, { o -> vm.update { it.copy(designOutdoorOrigin = o) } })
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    NumberField("T. moyenne annuelle", b.meanAnnualOutdoorTempC, { v -> vm.update { it.copy(meanAnnualOutdoorTempC = v ?: 11.0) } },
-                        Modifier.weight(1f), unit = "°C", nullable = false, min = -10.0, max = 30.0)
+                FieldRow(minFieldWidth = 160.dp) {
+                    NumberField("Temp. moyenne annuelle", b.meanAnnualOutdoorTempC, { v -> vm.update { it.copy(meanAnnualOutdoorTempC = v ?: 11.0) } },
+                        unit = "°C", nullable = false, min = -10.0, max = 30.0)
                     NumberField("Degrés-jours (DJU)", b.degreeDays, { v -> vm.update { it.copy(degreeDays = v ?: 2400.0) } },
-                        Modifier.weight(1f), decimals = 0, nullable = false, min = 0.0, max = 8000.0)
+                        unit = "°C·j", decimals = 0, nullable = false, min = 0.0, max = 8000.0)
                 }
                 Text("DJU en base ${Fmt.num(b.degreeDaysBase, 0)} °C · origine : ${b.degreeDaysOrigin.label}", style = MaterialTheme.typography.bodySmall)
             }
@@ -200,37 +228,48 @@ fun BuildingEditScreen(nav: NavController, vm: BuildingEditViewModel = hiltViewM
                 DropdownField("Niveau d'étanchéité (indicatif)", AirtightnessPreset.entries,
                     AirtightnessPreset.entries.firstOrNull { it.n50 == b.n50 }, { "${it.label} – n50 ≈ ${Fmt.num(it.n50, 1)} h⁻¹" },
                     { p -> vm.update { it.copy(n50 = p.n50, n50Origin = ValueOrigin.ESTIMATED) } })
-                NumberField("n50 (renouvellement sous 50 Pa)", b.n50, { v -> vm.update { it.copy(n50 = v ?: 10.0) } }, unit = "h⁻¹", decimals = 1, nullable = false, min = 0.1, max = 50.0,
-                    supportingText = "Valeur mesurée si un test d'infiltrométrie a été réalisé")
+                NumberField("Perméabilité n50", b.n50, { v -> vm.update { it.copy(n50 = v ?: 10.0) } }, unit = "h⁻¹", decimals = 1, nullable = false, min = 0.1, max = 50.0,
+                    supportingText = "Renouvellements d'air par heure sous 50 Pa ; valeur mesurée si un test d'infiltrométrie a été réalisé")
+                Text("Origine du n50", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OriginSelector(b.n50Origin, { o -> vm.update { it.copy(n50Origin = o) } })
                 DropdownField("Exposition au vent", Shielding.entries, b.shielding, { it.label }, { v -> vm.update { it.copy(shielding = v) } })
                 NumberField("Hauteur du bâtiment", b.buildingHeightM, { v -> vm.update { it.copy(buildingHeightM = v ?: 6.0) } }, unit = "m", decimals = 1, nullable = false, min = 1.0, max = 100.0)
             }
 
             SectionCard("Hypothèses de calcul", icon = Icons.Filled.Thermostat) {
-                Text("Ponts thermiques (forfait ΔU_TB appliqué aux parois de l'enveloppe)", style = MaterialTheme.typography.bodyMedium)
-                ChoiceChips(listOf(0.0, 0.05, 0.10, 0.15), b.thermalBridgeDeltaU, { if (it == 0.0) "Aucun (ψ détaillés)" else "${Fmt.num(it, 2)}" },
-                    { v -> vm.update { it.copy(thermalBridgeDeltaU = v) } })
-                NumberField("ΔU_TB", b.thermalBridgeDeltaU, { v -> vm.update { it.copy(thermalBridgeDeltaU = v ?: 0.1) } }, unit = "W/(m²·K)", nullable = false, min = 0.0, max = 0.5)
+                Text("Ponts thermiques : majoration forfaitaire ΔU appliquée aux parois de l'enveloppe", style = MaterialTheme.typography.bodyMedium)
+                ChoiceChips(listOf(0.0, 0.05, 0.10, 0.15), b.thermalBridgeDeltaU, {
+                    when (it) {
+                        0.0 -> "Aucune (saisie pièce par pièce)"
+                        0.05 -> "Faible · ${Fmt.num(it, 2)}"
+                        0.10 -> "Moyenne · ${Fmt.num(it, 2)}"
+                        else -> "Forte · ${Fmt.num(it, 2)}"
+                    }
+                }, { v -> vm.update { it.copy(thermalBridgeDeltaU = v) } })
+                NumberField("Majoration ΔU", b.thermalBridgeDeltaU, { v -> vm.update { it.copy(thermalBridgeDeltaU = v ?: 0.1) } }, unit = "W/(m²·K)", nullable = false, min = 0.0, max = 0.5,
+                    supportingText = "0,05 : isolation par l'extérieur · 0,15 : isolation par l'intérieur")
                 if (b.thermalBridgeDeltaU > 0) {
                     InfoBanner("Si vous saisissez des ponts thermiques linéiques détaillés dans les pièces, réduisez ce forfait pour éviter un double comptage.", kind = BannerKind.WARNING)
                 }
                 NumberField("Surpuissance de relance", b.reheatFactorWm2, { v -> vm.update { it.copy(reheatFactorWm2 = v ?: 0.0) } }, unit = "W/m²", decimals = 0,
                     nullable = false, min = 0.0, max = 60.0, supportingText = "0 pour un chauffage continu ; ≈ 10 à 20 W/m² en cas de réduits nocturnes")
-                NumberField("Inertie complémentaire (cloisons, mobilier)", b.additionalHeatCapacityJm2K / 1000, { v -> vm.update { it.copy(additionalHeatCapacityJm2K = (v ?: 20.0) * 1000) } },
-                    unit = "kJ/(m²·K)", decimals = 0, nullable = false, min = 0.0, max = 400.0, supportingText = "Utilisée par la simulation dynamique")
+                NumberField("Inertie complémentaire", b.additionalHeatCapacityJm2K / 1000, { v -> vm.update { it.copy(additionalHeatCapacityJm2K = (v ?: 20.0) * 1000) } },
+                    unit = "kJ/(m²·K)", decimals = 0, nullable = false, min = 0.0, max = 400.0, supportingText = "Cloisons et mobilier ; utilisée par la simulation dynamique")
             }
 
             TextInput("Notes", b.notes, { v -> vm.update { it.copy(notes = v) } }, singleLine = false)
 
-            Button(onClick = {
-                // Ouvert depuis l'onglet Maison : un simple retour suffit. Ouvert depuis l'Accueil : l'écran est retiré
-                // de la pile SANS être sauvegardé (sinon un formulaire périmé réapparaîtrait dans l'onglet Accueil).
-                if (!nav.popBackStack<HouseRoute>(inclusive = false)) {
-                    nav.popBackStack()
-                    nav.navigateToTab(HouseRoute)
-                }
-            }) {
+            Button(
+                onClick = {
+                    // Ouvert depuis l'onglet Maison : un simple retour suffit. Ouvert depuis l'Accueil : l'écran est retiré
+                    // de la pile SANS être sauvegardé (sinon un formulaire périmé réapparaîtrait dans l'onglet Accueil).
+                    if (!nav.popBackStack<HouseRoute>(inclusive = false)) {
+                        nav.popBackStack()
+                        nav.navigateToTab(HouseRoute)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+            ) {
                 Text("Continuer : saisir les pièces")
             }
         }

@@ -1,12 +1,12 @@
 package fr.thermohabitat.pro.ui.radiators
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -29,13 +29,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,10 +65,12 @@ import fr.thermohabitat.pro.recognition.ClassificationResult
 import fr.thermohabitat.pro.recognition.OcrEngine
 import fr.thermohabitat.pro.recognition.OcrResult
 import fr.thermohabitat.pro.recognition.RadiatorClassifier
+import fr.thermohabitat.pro.ui.components.ActionRow
 import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.ConfirmDialog
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
 import fr.thermohabitat.pro.ui.components.NumberField
@@ -283,12 +288,44 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
     var confirmDelete by remember { mutableStateOf(false) }
     var newRoom by remember { mutableStateOf(false) }
     var showIssues by remember { mutableStateOf<List<String>>(emptyList()) }
+    var deletePhotoId by remember { mutableStateOf<Long?>(null) }
+    var advanced by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+
+    // Retour visible quand la fiche repasse « à valider » (modification, plaque, bibliothèque) : elle sort du bilan.
+    // Sauvegardé pour couvrir aussi le retour depuis la bibliothèque ou les outils photo.
+    var wasValidated by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(form?.validated) {
+        val v = form?.validated ?: return@LaunchedEffect
+        val before = wasValidated
+        wasValidated = v
+        if (before == true && !v) snackbar.showSnackbar("Fiche repassée « à valider » : ce radiateur est exclu du bilan jusqu'à sa validation.")
+    }
+    // Validation : contrôle des données minimales, puis confirmation de la prise en compte.
+    val validate: () -> Unit = {
+        val cur = form
+        if (cur != null) {
+            val issues = validationIssues(cur)
+            if (issues.isEmpty()) {
+                vm.setValidated(true)
+                scope.launch {
+                    snackbar.showSnackbar(
+                        if (cur.roomId == null) "Fiche validée : attribuez-la à une pièce pour qu'elle compte dans le bilan."
+                        else "Radiateur validé : pris en compte dans l'étude.",
+                    )
+                }
+            } else {
+                showIssues = issues
+            }
+        }
+    }
 
     ScreenScaffold(
         title = form?.let { "Radiateur ${it.code}" } ?: "Radiateur",
         onBack = { nav.popBackStack() },
         actions = { IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Filled.Delete, "Supprimer") } },
+        snackbarHostState = snackbar,
     ) { padding ->
         val r = form ?: return@ScreenScaffold
         val model = r.toModel()
@@ -296,14 +333,36 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
         val rooms = project?.project?.rooms?.map { it.room }.orEmpty()
         val room = rooms.firstOrNull { it.id == r.roomId }
         val mainPhoto = photos.firstOrNull { it.kind == PhotoKind.FRONT } ?: photos.firstOrNull()
+        val study = project?.let { it.project.settings.studyRegime }
+        val ambient = ambientOverride ?: room?.setpointC ?: 20.0
         ScrollColumn(padding) {
             // --- Fiche de synthèse « Radiateur identifié » ---
             SectionCard("Radiateur identifié", icon = Icons.Filled.Thermostat) {
                 mainPhoto?.let { PhotoThumbnail(it.fileName, Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(12.dp))) }
+                // Statut et validation en premier : seul un radiateur validé et attribué à une pièce entre dans le bilan.
+                // La clé étrangère garantit que roomId désigne une pièce existante (ou null).
+                val inStudy = r.validated && r.roomId != null
+                StatusChip(if (inStudy) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
+                    text = when {
+                        !r.validated -> "À valider : non pris en compte"
+                        r.roomId == null -> "Validé, mais non attribué à une pièce : exclu du bilan"
+                        else -> "Validé : pris en compte dans l'étude"
+                    })
+                if (!r.validated) {
+                    Button(onClick = validate) { Icon(Icons.Filled.CheckCircle, null); Spacer(Modifier.width(8.dp)); Text("Valider la fiche") }
+                }
+                // Puissance utile au régime de l'étude, ou ce qu'il manque pour l'établir.
+                if (nominal == null) {
+                    InfoBanner("Puissance inconnue : identifiez le type et relevez les dimensions, ou saisissez la puissance documentée, " +
+                        "dans les sections ci-dessous.", kind = BannerKind.WARNING)
+                } else if (study != null) {
+                    val out = RadiatorPower.outputOf(model, study.supplyC, study.returnC, ambient)
+                    ValueRow("Puissance à ${study.label} (régime de l'étude)", if (out.powerW > 0) Fmt.watts(out.powerW) else "Non calculable", emphasize = true)
+                }
                 ValueRow("Type", r.type.label)
-                ValueRow("Matériau", r.material.label)
-                ValueRow("Éléments / colonnes", "${r.sections ?: "–"} / ${r.columns ?: "–"}")
-                ValueRow("Hauteur × longueur × profondeur", "${Fmt.mm(r.heightMm)} × ${Fmt.mm(r.lengthMm)} × ${Fmt.mm(r.depthMm)}")
+                // Dimensions, éléments, colonnes ou type de panneau en une ligne (« Dimensions à relever » si rien n'est saisi).
+                ValueRow("Dimensions", dimensionsText(model))
+                if (r.material != RadiatorMaterial.UNKNOWN) ValueRow("Matériau", r.material.label)
                 if (r.manufacturer.isNotBlank() || r.reference.isNotBlank() || r.model.isNotBlank()) {
                     ValueRow("Marque / modèle / référence", listOf(r.manufacturer, r.model, r.reference).filter { it.isNotBlank() }.joinToString(" · "))
                 }
@@ -315,14 +374,6 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                 ValueRow("Fiabilité", reliabilityLabel(r, nominal?.basis, nominal?.relativeUncertainty), emphasize = true)
                 ValueRow("Méthode d'identification", r.identificationMethod.label +
                     (r.identificationConfidence?.let { " (confiance ${Fmt.pct(it)})" } ?: ""))
-                // La clé étrangère garantit que roomId désigne une pièce existante (ou null).
-                val inStudy = r.validated && r.roomId != null
-                StatusChip(if (inStudy) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
-                    text = when {
-                        !r.validated -> "À valider : non pris en compte"
-                        r.roomId == null -> "Validé, mais non attribué à une pièce : exclu du bilan"
-                        else -> "Validé : pris en compte dans l'étude"
-                    })
             }
 
             // --- Photographies et outils ---
@@ -337,12 +388,15 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                     val current = photos.firstOrNull { it.id == ph.id } ?: ph
                     Text("Type de vue", style = MaterialTheme.typography.labelLarge)
                     ChoiceChips(listOf(PhotoKind.FRONT, PhotoKind.SIDE, PhotoKind.NAMEPLATE, PhotoKind.DETAIL), current.kind, { it.label }, { vm.setPhotoKind(current, it) })
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { nav.navigate(PhotoEditRoute(current.id)) }) { Icon(Icons.Filled.Crop, null); Text(" Recadrer") }
-                        OutlinedButton(onClick = { nav.navigate(ElementCountRoute(current.id, r.id)) }) { Icon(Icons.Filled.ViewColumn, null); Text(" Compter les éléments") }
-                        OutlinedButton(onClick = { nav.navigate(MeasureRoute(current.id, r.id)) }) { Icon(Icons.Filled.Straighten, null); Text(" Mesurer") }
-                        OutlinedButton(onClick = { vm.readPlate(current) }) { Icon(Icons.Filled.DocumentScanner, null); Text(" Lire la plaque") }
-                        TextButton(onClick = { vm.deletePhoto(current.id); selectedPhoto = null }) { Text("Supprimer", color = MaterialTheme.colorScheme.error) }
+                    // Tous les outils restent visibles : ils passent à la ligne au lieu de défiler hors écran.
+                    ActionRow {
+                        OutlinedButton(onClick = { nav.navigate(PhotoEditRoute(current.id)) }) { Icon(Icons.Filled.Crop, null); Spacer(Modifier.width(6.dp)); Text("Recadrer") }
+                        OutlinedButton(onClick = { nav.navigate(ElementCountRoute(current.id, r.id)) }) {
+                            Icon(Icons.Filled.ViewColumn, null); Spacer(Modifier.width(6.dp)); Text("Compter les éléments")
+                        }
+                        OutlinedButton(onClick = { nav.navigate(MeasureRoute(current.id, r.id)) }) { Icon(Icons.Filled.Straighten, null); Spacer(Modifier.width(6.dp)); Text("Mesurer") }
+                        OutlinedButton(onClick = { vm.readPlate(current) }) { Icon(Icons.Filled.DocumentScanner, null); Spacer(Modifier.width(6.dp)); Text("Lire la plaque") }
+                        TextButton(onClick = { deletePhotoId = current.id }) { Text("Supprimer la photo", color = MaterialTheme.colorScheme.error) }
                     }
                 }
             }
@@ -360,80 +414,106 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                         "Identifiez le radiateur avec la bibliothèque illustrée ; le comptage des éléments et la lecture de plaque restent disponibles.",
                         kind = BannerKind.WARNING)
                 }
-                Button(onClick = { nav.navigate(RadiatorLibraryRoute(r.id)) }) { Icon(Icons.AutoMirrored.Filled.MenuBook, null); Text("  Bibliothèque illustrée") }
+                Button(onClick = { nav.navigate(RadiatorLibraryRoute(r.id)) }) {
+                    Icon(Icons.AutoMirrored.Filled.MenuBook, null); Spacer(Modifier.width(8.dp)); Text("Bibliothèque illustrée")
+                }
                 RadiatorLibrary.find(r.categoryCode)?.let { cat ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        RadiatorIllustration(cat)
-                        Text("Catégorie retenue : ${cat.title}", style = MaterialTheme.typography.bodyMedium)
-                    }
+                    // Texte sur toute la largeur, illustration dessous (plus de colonne étroite à côté du dessin).
+                    Text("Catégorie retenue : ${cat.title}", style = MaterialTheme.typography.bodyMedium)
+                    RadiatorIllustration(cat)
                 }
                 TextInput("Libellé", r.label, { v -> vm.update { it.copy(label = v) } })
                 DropdownField("Type", RadiatorType.entries, r.type, { it.label }, { vm.setType(it) })
                 DropdownField("Matériau", RadiatorMaterial.entries, r.material, { it.label }, { v -> vm.update { it.copy(material = v) } })
                 DropdownField("Époque", RadiatorEra.entries, r.era, { it.label }, { v -> vm.update { it.copy(era = v) } })
                 if (r.type.isSectional || r.type == RadiatorType.CAST_IRON_PLATE) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        IntField("Nombre d'éléments", r.sections, { v -> vm.update { it.copy(sections = v) } }, Modifier.weight(1f), min = 1, max = 200)
+                    FieldRow {
+                        IntField("Éléments", r.sections, { v -> vm.update { it.copy(sections = v) } }, min = 1, max = 200)
                         IntField(if (r.type == RadiatorType.CAST_IRON_PLATE) "Plaques" else "Colonnes", r.columns, { v -> vm.update { it.copy(columns = v) } },
-                            Modifier.weight(1f), min = 1, max = 10)
+                            min = 1, max = 10)
                     }
                 }
                 if (r.type == RadiatorType.STEEL_PANEL) {
                     DropdownField("Type de panneau", PanelType.entries, r.panelType, { it.label }, { v -> vm.update { it.copy(panelType = v) } })
                 }
                 TextInput("Fabricant", r.manufacturer, { v -> vm.update { it.copy(manufacturer = v) } })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextInput("Modèle", r.model, { v -> vm.update { it.copy(model = v) } }, Modifier.weight(1f))
-                    TextInput("Référence", r.reference, { v -> vm.update { it.copy(reference = v) } }, Modifier.weight(1f))
+                FieldRow {
+                    TextInput("Modèle", r.model, { v -> vm.update { it.copy(model = v) } })
+                    TextInput("Référence", r.reference, { v -> vm.update { it.copy(reference = v) } })
                 }
             }
 
             // --- Dimensions ---
             SectionCard("Dimensions", icon = Icons.Filled.Straighten,
                 subtitle = "Aucune dimension n'est déduite d'une photo sans objet de référence. Mesurez au mètre ou utilisez l'outil de mesure avec référence.") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Hauteur", r.heightMm, { v -> vm.update { it.copy(heightMm = v) } }, Modifier.weight(1f), unit = "mm", decimals = 0, min = 50.0, max = 3000.0)
-                    NumberField("Longueur", r.lengthMm, { v -> vm.update { it.copy(lengthMm = v) } }, Modifier.weight(1f), unit = "mm", decimals = 0, min = 50.0, max = 6000.0)
-                    NumberField("Profondeur", r.depthMm, { v -> vm.update { it.copy(depthMm = v) } }, Modifier.weight(1f), unit = "mm", decimals = 0, min = 10.0, max = 500.0)
+                // Côte à côte seulement s'il y a la place ; sinon empilés (petit écran, police agrandie).
+                FieldRow {
+                    NumberField("Hauteur", r.heightMm, { v -> vm.update { it.copy(heightMm = v) } }, unit = "mm", decimals = 0, min = 50.0, max = 3000.0)
+                    NumberField("Longueur", r.lengthMm, { v -> vm.update { it.copy(lengthMm = v) } }, unit = "mm", decimals = 0, min = 50.0, max = 6000.0)
+                    NumberField("Profondeur", r.depthMm, { v -> vm.update { it.copy(depthMm = v) } }, unit = "mm", decimals = 0, min = 10.0, max = 500.0)
                 }
+                Text("Origine des dimensions", style = MaterialTheme.typography.labelLarge)
                 OriginSelector(r.dimensionsOrigin, { o -> vm.update { it.copy(dimensionsOrigin = o) } })
             }
 
             // --- Puissance ---
             SectionCard("Puissance") {
-                NumberField("Puissance nominale documentée", r.nominalPowerW, { v -> vm.update { it.copy(nominalPowerW = v,
+                NumberField("Puissance nominale", r.nominalPowerW, { v -> vm.update { it.copy(nominalPowerW = v,
                     nominalPowerOrigin = if (v == null) ValueOrigin.UNKNOWN else if (it.nominalPowerOrigin == ValueOrigin.UNKNOWN) ValueOrigin.DECLARED else it.nominalPowerOrigin) } },
-                    unit = "W", decimals = 0, min = 10.0, max = 20000.0, supportingText = "Fiche fabricant, plaque, catalogue. Vide : estimation géométrique.")
+                    unit = "W", decimals = 0, min = 10.0, max = 20000.0, supportingText = "Documentée (fiche fabricant, plaque, catalogue). Vide : estimation géométrique.")
                 if (r.nominalPowerW != null) {
                     Text("Conditions de la puissance documentée", style = MaterialTheme.typography.labelLarge)
                     val ratings = listOf(RatingCondition.EN442, RatingCondition.DIN4703)
                     ChoiceChips(ratings + listOf(RatingCondition(r.ratingSupplyC, r.ratingReturnC, r.ratingAmbientC)).filter { it !in ratings }, RatingCondition(r.ratingSupplyC, r.ratingReturnC, r.ratingAmbientC),
                         { if (it == RatingCondition.EN442) "EN 442 ${it.label}" else if (it == RatingCondition.DIN4703) "Ancienne norme ${it.label}" else it.label },
                         { c -> vm.update { it.copy(ratingSupplyC = c.supplyC, ratingReturnC = c.returnC, ratingAmbientC = c.ambientC) } })
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField("Départ", r.ratingSupplyC, { v -> v?.let { vm.update { x -> x.copy(ratingSupplyC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false)
-                        NumberField("Retour", r.ratingReturnC, { v -> v?.let { vm.update { x -> x.copy(ratingReturnC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false)
-                        NumberField("Ambiance", r.ratingAmbientC, { v -> v?.let { vm.update { x -> x.copy(ratingAmbientC = it) } } }, Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false)
+                    FieldRow {
+                        NumberField("Départ", r.ratingSupplyC, { v -> v?.let { vm.update { x -> x.copy(ratingSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false)
+                        NumberField("Retour", r.ratingReturnC, { v -> v?.let { vm.update { x -> x.copy(ratingReturnC = it) } } }, unit = "°C", decimals = 0, nullable = false)
+                        NumberField("Ambiance", r.ratingAmbientC, { v -> v?.let { vm.update { x -> x.copy(ratingAmbientC = it) } } }, unit = "°C", decimals = 0, nullable = false)
                     }
+                    Text("Origine de la puissance", style = MaterialTheme.typography.labelLarge)
                     OriginSelector(r.nominalPowerOrigin, { o -> vm.update { it.copy(nominalPowerOrigin = o) } })
-                    NumberField("Incertitude admise", r.documentedUncertaintyPct, { v -> vm.update { it.copy(documentedUncertaintyPct = v ?: 5.0) } }, unit = "%", decimals = 0, nullable = false, min = 0.0, max = 50.0)
                 }
-                NumberField("Exposant n", r.exponent, { v -> vm.update { it.copy(exponent = v, exponentOrigin = if (v == null) ValueOrigin.ESTIMATED else ValueOrigin.DECLARED) } },
-                    decimals = 2, min = 1.0, max = 2.0, supportingText = "Vide : valeur usuelle ${Fmt.num(r.type.defaultExponent, 2)} pour ce type")
-                NumberField("Débit d'eau connu (équilibrage)", r.flowKgH, { v -> vm.update { it.copy(flowKgH = v) } }, unit = "kg/h", decimals = 0, min = 1.0)
+                // Réglages experts repliés ; le bouton signale s'ils s'écartent des valeurs par défaut.
+                val customized = r.exponent != null || r.flowKgH != null || (r.nominalPowerW != null && r.documentedUncertaintyPct != 5.0)
+                val advancedLabel = when {
+                    advanced -> "Masquer les réglages avancés"
+                    r.nominalPowerW != null -> "Réglages avancés : exposant n, débit, incertitude"
+                    else -> "Réglages avancés : exposant n, débit"
+                }
+                TextButton(onClick = { advanced = !advanced }) { Text(if (!advanced && customized) "$advancedLabel (modifiés)" else advancedLabel) }
+                if (advanced) {
+                    if (r.nominalPowerW != null) {
+                        NumberField("Incertitude admise", r.documentedUncertaintyPct, { v -> vm.update { it.copy(documentedUncertaintyPct = v ?: 5.0) } }, unit = "%", decimals = 0,
+                            nullable = false, min = 0.0, max = 50.0, supportingText = "Sur la puissance documentée")
+                    }
+                    NumberField("Exposant n", r.exponent, { v -> vm.update { it.copy(exponent = v, exponentOrigin = if (v == null) ValueOrigin.ESTIMATED else ValueOrigin.DECLARED) } },
+                        decimals = 2, min = 1.0, max = 2.0,
+                        supportingText = "Sensibilité de la puissance à la température d'eau. Vide : valeur usuelle ${Fmt.num(r.type.defaultExponent, 2)} pour ce type")
+                    NumberField("Débit d'eau", r.flowKgH, { v -> vm.update { it.copy(flowKgH = v) } }, unit = "kg/h", decimals = 0, min = 1.0,
+                        supportingText = "Facultatif : débit connu après équilibrage")
+                }
                 HorizontalDivider()
                 when {
                     nominal == null -> InfoBanner("Puissance non déterminable : complétez les dimensions et le nombre d'éléments, ou saisissez la puissance documentée. " +
                         "Aucune puissance n'est inventée à partir de la seule photographie.", kind = BannerKind.WARNING)
                     else -> {
                         Text(nominal.method, style = MaterialTheme.typography.bodySmall)
-                        val ambient = ambientOverride ?: room?.setpointC ?: 20.0
                         NumberField("Température ambiante", ambientOverride, { vm.ambient.value = it }, unit = "°C", decimals = 1, min = 5.0, max = 30.0,
                             supportingText = "Vide : consigne de la pièce (${Fmt.temp(room?.setpointC ?: 20.0, 0)})")
                         Text("Puissance disponible selon le régime d'eau (ambiance ${Fmt.temp(ambient)})", style = MaterialTheme.typography.labelLarge)
+                        // Une valeur par ligne, régime de l'étude mis en avant ; « – » si le régime ne chauffe pas à cette ambiance.
                         Regime.STANDARD.forEach { reg ->
                             val out = RadiatorPower.outputOf(model, reg.supplyC, reg.returnC, ambient)
-                            ValueRow(reg.label, if (out.lowW != out.highW) "${Fmt.watts(out.powerW)}  (${Fmt.watts(out.lowW)} – ${Fmt.watts(out.highW)})" else Fmt.watts(out.powerW))
+                            val isStudy = reg == study
+                            ValueRow(if (isStudy) "${reg.label} (étude)" else reg.label, if (out.powerW > 0) Fmt.watts(out.powerW) else "–", emphasize = isStudy)
+                        }
+                        // Même facteur de correction pour la valeur et ses bornes : la plage relative, identique à tous les régimes, est donnée une fois.
+                        if (nominal.nominalW > 0 && nominal.highW > nominal.nominalW) {
+                            Text("Incertitude sur chaque valeur : −${Fmt.num((1 - nominal.lowW / nominal.nominalW) * 100, 0)} % / " +
+                                "+${Fmt.num((nominal.highW / nominal.nominalW - 1) * 100, 0)} %",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Text("Correction EN 442 : Φ = Φn × (ΔT / ΔTn)^n avec ΔT écart logarithmique moyen, n = ${Fmt.num(model.effectiveExponent, 2)}.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -443,8 +523,12 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
 
             // --- Pièce ---
             SectionCard("Dans quelle pièce se trouve ce radiateur ?") {
-                DropdownField("Pièce", rooms, room, { "${it.name} (${fr.thermohabitat.pro.ui.house.floorLabel(it.floorLevel)})" }, { v -> vm.update { it.copy(roomId = v.id) } },
-                    placeholder = "Non attribué")
+                if (project != null && rooms.isEmpty()) {
+                    InfoBanner("Aucune pièce dans l'étude : créez-en une pour que ce radiateur compte dans le bilan.", kind = BannerKind.WARNING)
+                } else {
+                    DropdownField("Pièce", rooms, room, { "${it.name} (${fr.thermohabitat.pro.ui.house.floorLabel(it.floorLevel)})" }, { v -> vm.update { it.copy(roomId = v.id) } },
+                        placeholder = "Non attribué")
+                }
                 OutlinedButton(onClick = { newRoom = true }) { Text("Créer une nouvelle pièce") }
                 if (room != null) TextButton(onClick = { vm.update { it.copy(roomId = null) } }) { Text("Retirer de la pièce") }
             }
@@ -453,12 +537,7 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
             SectionCard("Validation", icon = Icons.Filled.CheckCircle) {
                 Text("Les caractéristiques proposées (bibliothèque, comptage, lecture de plaque, IA) doivent être vérifiées. " +
                     "Seuls les radiateurs validés entrent dans le bilan de chauffage.", style = MaterialTheme.typography.bodyMedium)
-                SwitchRow("Je confirme les caractéristiques de ce radiateur", r.validated, { on ->
-                    if (on) {
-                        val issues = validationIssues(r)
-                        if (issues.isEmpty()) vm.setValidated(true) else showIssues = issues
-                    } else vm.setValidated(false)
-                })
+                SwitchRow("Je confirme les caractéristiques de ce radiateur", r.validated, { on -> if (on) validate() else vm.setValidated(false) })
             }
 
             TextInput("Notes", r.notes, { v -> vm.update { it.copy(notes = v) } }, singleLine = false)
@@ -468,7 +547,7 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
     // --- Dialogues ---
     when (val s = ocrState) {
         OcrUiState.Running -> AlertDialog(onDismissRequest = {}, confirmButton = {}, title = { Text("Lecture de la plaque…") },
-            text = { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(); Text("  Reconnaissance de texte sur le téléphone") } })
+            text = { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(); Spacer(Modifier.width(12.dp)); Text("Reconnaissance de texte sur le téléphone") } })
         is OcrUiState.Done -> OcrResultDialog(s.result, onDismiss = { vm.dismissOcr() }, onApply = { d, f -> vm.applyOcr(d, f) })
         OcrUiState.Idle -> Unit
     }
@@ -485,7 +564,15 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
             confirmButton = { TextButton(onClick = { showIssues = emptyList() }) { Text("Compris") } },
         )
     }
-    if (newRoom) NewRoomDialog(onDismiss = { newRoom = false }) { name, floor -> newRoom = false; scope.launch { vm.createRoom(name, floor) } }
+    if (newRoom) NewRoomDialog(onDismiss = { newRoom = false }) { name, floor ->
+        newRoom = false
+        scope.launch { if (vm.createRoom(name, floor) != null) snackbar.showSnackbar("Pièce « $name » créée et attribuée à ce radiateur.") }
+    }
+    deletePhotoId?.let { id ->
+        ConfirmDialog("Supprimer cette photo ?", "Elle sera effacée du téléphone. La fiche du radiateur est conservée.", "Supprimer",
+            onConfirm = { vm.deletePhoto(id); selectedPhoto = null },
+            onDismiss = { deletePhotoId = null }, destructive = true)
+    }
     if (confirmDelete) {
         ConfirmDialog("Supprimer ce radiateur ?", "La fiche et ses photos seront effacées du téléphone.", "Supprimer",
             onConfirm = { vm.delete { nav.popBackStack() } }, onDismiss = { confirmDelete = false }, destructive = true)
@@ -598,7 +685,7 @@ private fun NewRoomDialog(onDismiss: () -> Unit, onCreate: (String, Int) -> Unit
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextInput("Nom de la pièce", name, { name = it })
-                IntField("Niveau (0 = rez-de-chaussée)", floor, { floor = it }, min = -3, max = 20)
+                IntField("Niveau", floor, { floor = it }, min = -3, max = 20, supportingText = "0 = rez-de-chaussée, −1 = sous-sol")
                 Text("Dimensions et parois à compléter ensuite dans l'onglet Maison.", style = MaterialTheme.typography.bodySmall)
             }
         },

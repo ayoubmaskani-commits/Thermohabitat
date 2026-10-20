@@ -3,21 +3,28 @@ package fr.thermohabitat.pro.ui.simulations
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,8 +39,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.domain.AnalyzedProject
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.ActionRow
 import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
+import fr.thermohabitat.pro.ui.components.EmptyState
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.FloorPlan
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.LegendDot
@@ -48,7 +58,10 @@ import fr.thermohabitat.pro.ui.components.SwitchRow
 import fr.thermohabitat.pro.ui.components.ValueRow
 import fr.thermohabitat.pro.ui.components.statusColor
 import fr.thermohabitat.pro.ui.house.floorLabel
+import fr.thermohabitat.pro.ui.navigation.HouseRoute
+import fr.thermohabitat.pro.ui.navigation.RadiatorsRoute
 import fr.thermohabitat.pro.ui.navigation.RoomEditRoute
+import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.theme.LocalStatusColors
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.calc.BuildingCoverage
@@ -115,30 +128,56 @@ class ComparisonViewModel @Inject constructor(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel()) {
     val data by vm.data.collectAsStateWithLifecycle()
     val options by vm.options.collectAsStateWithLifecycle()
-    ScreenScaffold(title = "Besoins et puissances", onBack = { nav.popBackStack() }) { padding ->
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    ScreenScaffold(title = "Besoins et puissances", onBack = { nav.popBackStack() }, snackbarHostState = snackbar) { padding ->
         ScrollColumn(padding) {
             val d = data ?: return@ScrollColumn
+            if (d.analyzed.project.building.rooms.isEmpty()) {
+                // Sans pièce, la comparaison n'afficherait que des zéros : on guide vers la saisie.
+                EmptyState("Aucune pièce saisie", "La comparaison besoins / radiateurs nécessite au moins une pièce avec ses parois.",
+                    actionLabel = "Saisir les pièces", onAction = { nav.navigateToTab(HouseRoute) })
+                return@ScrollColumn
+            }
             val settings = d.analyzed.project.settings
+            val noEmitter = d.supply.rooms.none { it.hasEmitters }
+            if (noEmitter) {
+                InfoBanner("Aucun radiateur validé : la puissance disponible est nulle dans toutes les pièces. Ajoutez puis validez les radiateurs.",
+                    kind = BannerKind.WARNING)
+                Button(onClick = { nav.navigateToTab(RadiatorsRoute) }) { Text("Saisir les radiateurs") }
+            }
             SectionCard("Régime d'eau étudié", icon = Icons.Filled.Thermostat) {
                 ChoiceChips(Regime.STANDARD, d.regime, { it.label }, { vm.options.value = options.copy(regime = it) })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FieldRow {
                     NumberField("Départ", d.regime.supplyC, { v -> v?.let { vm.options.value = options.copy(regime = Regime(it, minOf(d.regime.returnC, it - 1))) } },
-                        Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false, min = 25.0, max = 90.0)
+                        unit = "°C", decimals = 0, nullable = false, min = 25.0, max = 90.0)
                     NumberField("Retour", d.regime.returnC, { v -> v?.let { vm.options.value = options.copy(regime = Regime(d.regime.supplyC, minOf(it, d.regime.supplyC - 1))) } },
-                        Modifier.weight(1f), unit = "°C", decimals = 0, nullable = false, min = 20.0, max = 89.0)
+                        unit = "°C", decimals = 0, nullable = false, min = 20.0, max = 89.0)
                 }
                 Text("Hydraulique", style = MaterialTheme.typography.labelLarge)
-                ChoiceChips(listOf(false, true), d.fixedFlow, { if (it) "Débit nominal conservé" else "Écart départ/retour constant" },
+                ChoiceChips(listOf(false, true), d.fixedFlow, { if (it) "Débit constant" else "Écart constant" },
                     { vm.options.value = options.copy(fixedFlow = it) })
-                if (d.fixedFlow) Text("Chaque radiateur conserve son débit (saisi ou nominal) : l'écart départ/retour diminue quand la température baisse.",
-                    style = MaterialTheme.typography.bodySmall)
+                Text(
+                    if (d.fixedFlow) "Chaque radiateur conserve son débit (saisi ou nominal) : l'écart départ/retour diminue quand la température baisse."
+                    else "L'écart départ/retour reste celui du régime choisi, quelle que soit la température.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 SwitchRow("Hypothèse prudente", options.conservative, { vm.options.value = options.copy(conservative = it) },
                     description = "Utilise la borne basse des puissances estimées pour le régime minimal")
-                OutlinedButton(onClick = { vm.setAsStudyRegime() }) { Text("Définir comme régime d'étude du projet") }
+                // Bouton désactivé quand le régime affiché est déjà celui de l'étude ; confirmation par un message après l'enregistrement.
+                val isStudy = d.regime == settings.studyRegime && d.fixedFlow == settings.fixedFlow
+                OutlinedButton(enabled = !isStudy, onClick = {
+                    val label = d.regime.label
+                    scope.launch {
+                        vm.setAsStudyRegime().join()
+                        snackbar.showSnackbar("Régime $label retenu pour toute l'étude")
+                    }
+                }) { Text(if (isStudy) "Régime d'étude actuel" else "Définir comme régime d'étude") }
             }
 
             val c = d.coverage
@@ -160,7 +199,8 @@ fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel
                 }
                 sup.limitingRoom?.let { ValueRow("Pièce dimensionnante", it.roomName) }
                 sup.uncoverableRooms.forEach { InfoBanner("${it.roomName} : besoin non couvert même à 90 °C.", kind = BannerKind.WARNING) }
-                sup.roomsWithoutEmitters.forEach { InfoBanner("${it.roomName} : aucun radiateur validé.", kind = BannerKind.WARNING) }
+                // Sans aucun radiateur, le bandeau en tête suffit : pas un avertissement par pièce.
+                if (!noEmitter) sup.roomsWithoutEmitters.forEach { InfoBanner("${it.roomName} : aucun radiateur validé.", kind = BannerKind.WARNING) }
                 HorizontalDivider()
                 sup.rooms.filter { it.hasEmitters }.forEach { ValueRow(it.roomName, it.requiredSupplyC?.let { t -> Fmt.temp(t) } ?: "> 90 °C") }
             }
@@ -171,8 +211,16 @@ fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel
                     Column(Modifier.fillMaxWidth().clickable { nav.navigate(RoomEditRoute(rc.roomId)) }.padding(vertical = 6.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(rc.roomName, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                            StatusChip(rc.status)
+                            // Le statut passe sous le nom s'il ne tient pas à côté : le nom n'est jamais écrasé.
+                            FlowRow(
+                                Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(rc.roomName, Modifier.align(Alignment.CenterVertically), fontWeight = FontWeight.SemiBold)
+                                StatusChip(rc.status, Modifier.align(Alignment.CenterVertically))
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Text("${Fmt.area(rc.floorAreaM2)} · ${Fmt.temp(rc.setpointC, 0)} · besoin ${Fmt.watts(rc.needW)}", style = MaterialTheme.typography.bodySmall)
                         Text("Disponible ${Fmt.watts(rc.availableW)}" + (if (rc.availableLowW != rc.availableHighW) " (${Fmt.watts(rc.availableLowW)}–${Fmt.watts(rc.availableHighW)})" else "") +
@@ -203,8 +251,8 @@ fun ComparisonScreen(nav: NavController, vm: ComparisonViewModel = hiltViewModel
                         PlanRoom(r.id, r.name, r.lengthM, r.widthM, r.planX, r.planY, statusColor(rc?.status ?: CoverageStatus.NO_NEED),
                             rc?.let { "${Fmt.watts(it.availableW)} / ${Fmt.watts(it.needW)}" })
                     }, onRoomClick = { nav.navigate(RoomEditRoute(it)) })
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        val s = LocalStatusColors.current
+                    val s = LocalStatusColors.current
+                    ActionRow {
                         LegendDot(s.sufficient, "Suffisant"); LegendDot(s.limit, "Limite"); LegendDot(s.insufficient, "Insuffisant")
                     }
                 }

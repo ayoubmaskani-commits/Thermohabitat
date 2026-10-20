@@ -34,6 +34,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.EmptyState
 import fr.thermohabitat.pro.ui.components.ScreenScaffold
 import fr.thermohabitat.pro.ui.components.ScrollColumn
@@ -46,6 +47,7 @@ import fr.thermohabitat.pro.ui.navigation.EnergyRoute
 import fr.thermohabitat.pro.ui.navigation.HeatPumpRoute
 import fr.thermohabitat.pro.ui.navigation.HomeRoute
 import fr.thermohabitat.pro.ui.navigation.HouseRoute
+import fr.thermohabitat.pro.ui.navigation.RadiatorsRoute
 import fr.thermohabitat.pro.ui.navigation.ScenariosRoute
 import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.util.Fmt
@@ -76,12 +78,20 @@ fun SimulationsScreen(nav: NavController, vm: SimulationsViewModel = hiltViewMod
                     Button(onClick = { nav.navigateToTab(HouseRoute) }) { Text("Saisir les pièces") }
                 }
             } else {
+                val noEmitter = a.result.supply.rooms.none { it.hasEmitters }
                 SectionCard(a.project.entity.name, subtitle = "Synthèse au régime d'étude ${a.result.studyCoverage.supplyC.toInt()}/${a.result.studyCoverage.returnC?.toInt() ?: "–"} °C") {
                     ValueRow("Puissance nécessaire", Fmt.kw(a.result.heatLoss.totalW), emphasize = true)
-                    ValueRow("Besoins couverts par les radiateurs validés", Fmt.coverage(a.result.studyCoverage))
-                    ValueRow("Température de départ nécessaire", Fmt.supply(a.result.supply))
-                    ValueRow("Compatibilité PAC estimée", a.result.compatibility.label, emphasize = true)
-                    Text(a.result.compatibility.description, style = MaterialTheme.typography.bodySmall)
+                    if (noEmitter) {
+                        // Sans radiateur validé, couverture, départ et compatibilité sont indéterminés : un seul message et l'action utile.
+                        InfoBanner("Aucun radiateur validé : la couverture des besoins, la température de départ et la compatibilité PAC " +
+                            "seront calculées dès qu'un radiateur sera saisi et validé.", kind = BannerKind.WARNING)
+                        Button(onClick = { nav.navigateToTab(RadiatorsRoute) }) { Text("Saisir les radiateurs") }
+                    } else {
+                        ValueRow("Besoins couverts", Fmt.coverage(a.result.studyCoverage))
+                        ValueRow("Température de départ nécessaire", Fmt.supply(a.result.supply))
+                        ValueRow("Compatibilité PAC estimée", a.result.compatibility.label, emphasize = true)
+                        Text(a.result.compatibility.description, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             ToolCard(Icons.Filled.SwapHoriz, "Comparer besoins et radiateurs",

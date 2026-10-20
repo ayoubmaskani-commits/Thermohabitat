@@ -2,16 +2,15 @@ package fr.thermohabitat.pro.ui.simulations
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Euro
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -23,8 +22,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.domain.AnalyzedProject
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.BarEntry
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.HorizontalBarChart
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.NumberField
@@ -32,6 +33,10 @@ import fr.thermohabitat.pro.ui.components.ScreenScaffold
 import fr.thermohabitat.pro.ui.components.ScrollColumn
 import fr.thermohabitat.pro.ui.components.SectionCard
 import fr.thermohabitat.pro.ui.components.ValueRow
+import fr.thermohabitat.pro.ui.components.readableOn
+import fr.thermohabitat.pro.ui.navigation.HouseRoute
+import fr.thermohabitat.pro.ui.navigation.navigateToTab
+import fr.thermohabitat.pro.ui.theme.LocalStatusColors
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.calc.EnergyCarrier
 import fr.thermohabitat.thermal.calc.EnergySettings
@@ -89,13 +94,46 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
             val e = d.analyzed.project.settings.energy
             val est = d.analyzed.result.energy
             val climate = d.analyzed.project.building.climate
+            // Sans besoin modélisé (aucune pièce), les coûts ne reposent que sur une consommation constatée, si elle est saisie.
+            val noModel = est.annualNeedKwh <= 0.0
+            val hasCosts = (est.calibratedNeedKwh ?: est.annualNeedKwh) > 0.0
+
+            if (noModel) {
+                InfoBanner(
+                    if (hasCosts) "Aucun besoin calculé (pièces non saisies) : les coûts ci-dessous reposent uniquement sur la consommation constatée."
+                    else "Aucun besoin calculé : saisissez les pièces de la maison pour estimer besoins et coûts. " +
+                        "Vous pouvez déjà renseigner l'énergie actuelle et vos tarifs.",
+                    kind = BannerKind.WARNING,
+                )
+                Button(onClick = { nav.navigateToTab(HouseRoute) }) { Text("Saisir les pièces") }
+            }
+
+            // L'essentiel (dépense annuelle) en tête ; les saisies suivent.
+            if (hasCosts) {
+                val current = est.carriers.firstOrNull { it.carrier == e.currentCarrier }
+                val best = est.carriers.minByOrNull { it.costEur }
+                SectionCard("En résumé", icon = Icons.Filled.Euro, subtitle = "Selon les prix et rendements saisis plus bas") {
+                    ValueRow(if (est.calibratedNeedKwh != null) "Besoins annuels (calés sur la consommation)" else "Besoins annuels estimés",
+                        "${Fmt.num(est.calibratedNeedKwh ?: est.annualNeedKwh, 0)} kWh")
+                    current?.let { ValueRow("Dépense actuelle estimée", "${Fmt.eur(it.costEur)}/an", emphasize = true) }
+                    best?.let { b ->
+                        if (b.carrier == e.currentCarrier || b.savingsVsCurrentEur < 0.5) {
+                            ValueRow("Énergie la moins chère", "Énergie actuelle")
+                        } else {
+                            ValueRow("Énergie la moins chère", "${b.carrier.label} · ${Fmt.eur(b.costEur)}/an")
+                            ValueRow("Économie possible", "${Fmt.eur(b.savingsVsCurrentEur)}/an")
+                        }
+                    }
+                }
+            }
 
             SectionCard("Situation actuelle", icon = Icons.Filled.Calculate) {
-                DropdownField("Énergie de chauffage actuelle", EnergyCarrier.entries.filter { it != EnergyCarrier.HEAT_PUMP } + EnergyCarrier.HEAT_PUMP,
+                DropdownField("Énergie actuelle", EnergyCarrier.entries.filter { it != EnergyCarrier.HEAT_PUMP } + EnergyCarrier.HEAT_PUMP,
                     e.currentCarrier, { it.label }, { c -> vm.edit { it.copy(currentCarrier = c, currentEfficiency = it.efficiencyOf(c).coerceAtMost(if (c == EnergyCarrier.HEAT_PUMP) 6.0 else 1.1)) } })
-                NumberField("Consommation annuelle constatée (chauffage)", e.currentAnnualConsumption, { v -> vm.edit { it.copy(currentAnnualConsumption = v) } },
-                    unit = e.currentCarrier.unit, decimals = 0, min = 0.0, supportingText = "Facultatif : sert à caler l'estimation (moyenne de plusieurs hivers de préférence)")
-                NumberField(if (e.currentCarrier == EnergyCarrier.HEAT_PUMP) "SCOP constaté" else "Rendement saisonnier de l'installation",
+                NumberField("Consommation annuelle", e.currentAnnualConsumption, { v -> vm.edit { it.copy(currentAnnualConsumption = v) } },
+                    unit = e.currentCarrier.unit, decimals = 0, min = 0.0,
+                    supportingText = "Facultatif : consommation de chauffage constatée, pour caler l'estimation (moyenne de plusieurs hivers de préférence)")
+                NumberField(if (e.currentCarrier == EnergyCarrier.HEAT_PUMP) "SCOP constaté" else "Rendement saisonnier",
                     if (e.currentCarrier == EnergyCarrier.HEAT_PUMP) e.currentEfficiency else e.currentEfficiency * 100,
                     { v -> v?.let { vm.edit { x -> x.copy(currentEfficiency = if (x.currentCarrier == EnergyCarrier.HEAT_PUMP) it else it / 100) } } },
                     unit = if (e.currentCarrier == EnergyCarrier.HEAT_PUMP) null else "%", decimals = if (e.currentCarrier == EnergyCarrier.HEAT_PUMP) 2 else 0, nullable = false,
@@ -105,50 +143,50 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
                 ValueRow("Degrés-jours utilisés", "${Fmt.num(est.degreeDays, 0)} DJU (climat : ${Fmt.num(climate.degreeDays, 0)} en base ${Fmt.num(climate.degreeDaysBase, 0)} °C, ${climate.degreeDaysOrigin.label.lowercase()})")
             }
 
-            SectionCard("Besoins de chauffage", icon = Icons.Filled.Euro) {
-                ValueRow("Besoins annuels estimés (modèle)", "${Fmt.num(est.annualNeedKwh, 0)} kWh", emphasize = true)
-                est.calibration?.let { c ->
-                    ValueRow("Chaleur réellement fournie (consommation × rendement)", "${Fmt.num(c.deliveredHeatKwh, 0)} kWh")
-                    ValueRow("Rapport réel / modèle", Fmt.num(c.ratio, 2))
-                    InfoBanner(when {
-                        c.ratio > 1.25 -> "La consommation réelle dépasse nettement le modèle : rendement surestimé, consigne plus élevée, ou déperditions sous-estimées (U, infiltrations)."
-                        c.ratio < 0.75 -> "La consommation réelle est nettement inférieure au modèle : chauffage partiel, apports gratuits importants, ou déperditions surestimées."
-                        else -> "Le modèle est cohérent avec la consommation réelle (écart inférieur à 25 %). Les coûts ci-dessous sont calés sur la consommation réelle."
-                    })
+            if (!noModel) {
+                SectionCard("Besoins de chauffage") {
+                    ValueRow("Besoins annuels estimés (modèle)", "${Fmt.num(est.annualNeedKwh, 0)} kWh", emphasize = true)
+                    // Le rapport réel / modèle n'a de sens que si le modèle donne un besoin.
+                    est.calibration?.takeIf { it.modelledNeedKwh > 0 }?.let { c ->
+                        ValueRow("Chaleur réellement fournie (consommation × rendement)", "${Fmt.num(c.deliveredHeatKwh, 0)} kWh")
+                        ValueRow("Rapport réel / modèle", Fmt.num(c.ratio, 2))
+                        InfoBanner(when {
+                            c.ratio > 1.25 -> "La consommation réelle dépasse nettement le modèle : rendement surestimé, consigne plus élevée, ou déperditions sous-estimées (U, infiltrations)."
+                            c.ratio < 0.75 -> "La consommation réelle est nettement inférieure au modèle : chauffage partiel, apports gratuits importants, ou déperditions surestimées."
+                            else -> "Le modèle est cohérent avec la consommation réelle (écart inférieur à 25 %). Les coûts ci-dessous sont calés sur la consommation réelle."
+                        })
+                    }
                 }
             }
 
-            SectionCard("Prix et rendements") {
-                Text("Prix : exemples à remplacer par vos tarifs actuels.", style = MaterialTheme.typography.bodySmall)
-                EnergyCarrier.entries.forEach { c ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField(c.label, e.priceOf(c), { v -> v?.let { vm.edit { x -> x.copy(prices = x.prices + (c to it)) } } }, Modifier.weight(1.2f),
-                            unit = "€/${c.unit}", decimals = 3, nullable = false, min = 0.0)
-                        if (c == EnergyCarrier.HEAT_PUMP) {
-                            NumberField("SCOP imposé", e.heatPumpScopOverride, { v -> vm.edit { x -> x.copy(heatPumpScopOverride = v) } }, Modifier.weight(0.8f),
-                                decimals = 2, min = 1.0, max = 7.0, supportingText = "Vide : calculé (${Fmt.num(d.analyzed.result.seasonal?.scop, 2)})")
-                        } else {
-                            NumberField("Rendement", e.efficiencyOf(c) * 100, { v -> v?.let { vm.edit { x -> x.copy(efficiencies = x.efficiencies + (c to it / 100)) } } },
-                                Modifier.weight(0.8f), unit = "%", decimals = 0, nullable = false, min = 10.0, max = 120.0)
+            if (hasCosts) {
+                SectionCard("Comparaison des énergies", subtitle = "Dépense annuelle et écart avec l'énergie actuelle") {
+                    est.carriers.forEach { c ->
+                        val isCurrent = c.carrier == e.currentCarrier
+                        val delta = c.savingsVsCurrentEur
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(c.carrier.label + if (isCurrent) " (actuel)" else "", fontWeight = FontWeight.SemiBold)
+                            // Dépense d'abord, puis l'écart signé en clair (jamais « économie −412 € »).
+                            Text("${Fmt.eur(c.costEur)}/an", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            if (!isCurrent) {
+                                when {
+                                    delta >= 0.5 -> Text("Économie de ${Fmt.eur(delta)}/an", style = MaterialTheme.typography.bodyMedium,
+                                        color = readableOn(LocalStatusColors.current.sufficient))
+                                    delta <= -0.5 -> Text("Surcoût de ${Fmt.eur(-delta)}/an", style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.error)
+                                    else -> Text("Coût équivalent", style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            Text("${if (c.carrier == EnergyCarrier.HEAT_PUMP) "SCOP" else "Rendement"} ${if (c.carrier == EnergyCarrier.HEAT_PUMP) Fmt.num(c.efficiency, 2) else Fmt.pct(c.efficiency)} · " +
+                                "${Fmt.num(c.quantity, 0)} ${c.carrier.unit}/an · ${Fmt.num(c.finalEnergyKwh, 0)} kWh",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        HorizontalDivider()
                     }
+                    HorizontalBarChart(est.carriers.map { BarEntry(it.carrier.label, it.costEur, detail = "${Fmt.num(it.quantity, 0)} ${it.carrier.unit}/an") },
+                        valueFormatter = { Fmt.eur(it) })
                 }
-            }
-
-            SectionCard("Comparaison des énergies") {
-                est.carriers.forEach { c ->
-                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                        Text(c.carrier.label + if (c.carrier == e.currentCarrier) " (actuel)" else "", fontWeight = FontWeight.SemiBold)
-                        Text("${if (c.carrier == EnergyCarrier.HEAT_PUMP) "SCOP" else "Rendement"} ${if (c.carrier == EnergyCarrier.HEAT_PUMP) Fmt.num(c.efficiency, 2) else Fmt.pct(c.efficiency)} · " +
-                            "${Fmt.num(c.quantity, 0)} ${c.carrier.unit}/an · ${Fmt.num(c.finalEnergyKwh, 0)} kWh",
-                            style = MaterialTheme.typography.bodySmall)
-                        Text("Dépense ${Fmt.eur(c.costEur)}/an" + if (c.carrier != e.currentCarrier) " · économie ${Fmt.eur(c.savingsVsCurrentEur)}/an" else "",
-                            style = MaterialTheme.typography.bodyMedium)
-                    }
-                    HorizontalDivider()
-                }
-                HorizontalBarChart(est.carriers.map { BarEntry(it.carrier.label, it.costEur, detail = "${Fmt.num(it.quantity, 0)} ${it.carrier.unit}/an") },
-                    valueFormatter = { Fmt.eur(it) })
             }
 
             if (d.impacts.isNotEmpty()) {
@@ -158,6 +196,25 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
                     }
                     Text("Une température d'eau plus basse améliore le rendement de la PAC, à condition que les radiateurs couvrent encore les besoins.",
                         style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            // Saisie longue (sept énergies) placée après les résultats ; nom de l'énergie en titre, champs courts.
+            SectionCard("Prix et rendements", subtitle = "Prix : exemples à remplacer par vos tarifs actuels") {
+                EnergyCarrier.entries.forEachIndexed { index, c ->
+                    if (index > 0) HorizontalDivider()
+                    Text(c.label, style = MaterialTheme.typography.titleSmall)
+                    FieldRow {
+                        NumberField("Prix", e.priceOf(c), { v -> v?.let { vm.edit { x -> x.copy(prices = x.prices + (c to it)) } } },
+                            unit = "€/${c.unit}", decimals = 3, nullable = false, min = 0.0)
+                        if (c == EnergyCarrier.HEAT_PUMP) {
+                            NumberField("SCOP imposé", e.heatPumpScopOverride, { v -> vm.edit { x -> x.copy(heatPumpScopOverride = v) } },
+                                decimals = 2, min = 1.0, max = 7.0, supportingText = "Facultatif. Vide : SCOP calculé (${Fmt.num(d.analyzed.result.seasonal?.scop, 2)})")
+                        } else {
+                            NumberField("Rendement", e.efficiencyOf(c) * 100, { v -> v?.let { vm.edit { x -> x.copy(efficiencies = x.efficiencies + (c to it / 100)) } } },
+                                unit = "%", decimals = 0, nullable = false, min = 10.0, max = 120.0)
+                        }
+                    }
                 }
             }
 

@@ -3,6 +3,7 @@ package fr.thermohabitat.pro.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
@@ -18,12 +19,14 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +70,7 @@ fun autoLayout(rooms: List<PlanRoom>, maxRowWidthM: Double = 12.0, gapM: Double 
 /**
  * Plan 2D simplifié d'un niveau : rectangles à l'échelle colorés selon la couverture.
  * Toucher une pièce l'ouvre ; un appui long puis glisser la déplace (position enregistrée).
+ * Sans [height] imposée, la hauteur suit les proportions du plan (pas de grand vide sous un plan large).
  */
 @Composable
 fun FloorPlan(
@@ -74,7 +78,7 @@ fun FloorPlan(
     onRoomClick: (Long) -> Unit,
     onRoomMoved: ((Long, Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier,
-    height: Dp = 300.dp,
+    height: Dp? = null,
 ) {
     val laidOut = remember(rooms) { autoLayout(rooms) }
     val dragOffsets = remember(rooms) { mutableStateMapOf<Long, Offset>() }
@@ -94,7 +98,11 @@ fun FloorPlan(
     }
 
     Canvas(
-        modifier.fillMaxWidth().height(height)
+        modifier.fillMaxWidth()
+            .then(
+                if (height != null) Modifier.height(height)
+                else Modifier.aspectRatio((extentX / extentY).toFloat().coerceIn(0.85f, 1.8f)),
+            )
             .pointerInput(laidOut) {
                 detectTapGestures { pos ->
                     val scale = scaleFor(Size(size.width.toFloat(), size.height.toFloat()))
@@ -131,23 +139,32 @@ fun FloorPlan(
             },
     ) {
         val scale = scaleFor(size)
+        val pad = 3.dp.toPx()
         for (r in laidOut) {
             val rect = rectOf(r, scale)
-            drawRoundRect(r.fill.copy(alpha = if (dragging == r.id) 0.9f else 0.65f), rect.topLeft, rect.size, CornerRadius(6f))
+            // Remplissage léger : le texte onSurface reste lisible sur le vert, l'orange et le rouge (thème sombre compris).
+            drawRoundRect(r.fill.copy(alpha = if (dragging == r.id) 0.6f else 0.35f), rect.topLeft, rect.size, CornerRadius(6f))
             drawRoundRect(outline, rect.topLeft, rect.size, CornerRadius(6f), style = Stroke(width = 2f))
+            // Hauteur bornée à la pièce : le nom passe sur une ligne avec « … » au lieu de déborder.
+            val inner = Constraints(
+                maxWidth = max(1, (rect.width - 2 * pad).toInt()),
+                maxHeight = max(1, (rect.height - 2 * pad).toInt()),
+            )
             val label = textMeasurer.measure(
                 r.name, TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = textColor),
-                overflow = TextOverflow.Ellipsis, maxLines = 2,
-                constraints = androidx.compose.ui.unit.Constraints(maxWidth = max(1, (rect.width - 8).toInt())),
+                overflow = TextOverflow.Ellipsis, maxLines = 2, constraints = inner,
             )
-            drawText(label, topLeft = Offset(rect.left + 4, rect.top + 4))
-            r.caption?.let { c ->
-                val cap = textMeasurer.measure(
-                    c, TextStyle(fontSize = 10.sp, color = textColor), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    constraints = androidx.compose.ui.unit.Constraints(maxWidth = max(1, (rect.width - 8).toInt())),
-                )
-                if (rect.height > label.size.height + cap.size.height + 8) {
-                    drawText(cap, topLeft = Offset(rect.left + 4, rect.top + 6 + label.size.height))
+            // Le texte ne sort jamais de sa pièce (pas de chevauchement avec les pièces voisines).
+            clipRect(rect.left, rect.top, rect.right, rect.bottom) {
+                drawText(label, topLeft = Offset(rect.left + pad, rect.top + pad))
+                r.caption?.let { c ->
+                    val cap = textMeasurer.measure(
+                        c, TextStyle(fontSize = 10.sp, color = textColor), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        constraints = Constraints(maxWidth = inner.maxWidth),
+                    )
+                    if (rect.height > label.size.height + cap.size.height + 2 * pad) {
+                        drawText(cap, topLeft = Offset(rect.left + pad, rect.top + pad + label.size.height))
+                    }
                 }
             }
         }

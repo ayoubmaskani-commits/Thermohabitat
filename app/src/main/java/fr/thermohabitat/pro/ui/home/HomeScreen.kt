@@ -2,9 +2,14 @@ package fr.thermohabitat.pro.ui.home
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +36,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,6 +47,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -54,6 +63,8 @@ import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.data.repository.SettingsRepository
 import fr.thermohabitat.pro.domain.AnalyzedProject
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.ActionRow
+import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.BarEntry
 import fr.thermohabitat.pro.ui.components.ChartPalette
 import fr.thermohabitat.pro.ui.components.ConfirmDialog
@@ -71,6 +82,7 @@ import fr.thermohabitat.pro.ui.components.StatusChip
 import fr.thermohabitat.pro.ui.navigation.BuildingEditRoute
 import fr.thermohabitat.pro.ui.navigation.CaptureRoute
 import fr.thermohabitat.pro.ui.navigation.HouseRoute
+import fr.thermohabitat.pro.ui.navigation.RadiatorsRoute
 import fr.thermohabitat.pro.ui.navigation.SettingsRoute
 import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.theme.LocalStatusColors
@@ -167,7 +179,9 @@ fun HomeScreen(nav: NavController, vm: HomeViewModel = hiltViewModel()) {
 
             // Clé = projet : l'état local des graphiques (sélection) repart de zéro quand on change de projet.
             state.active?.let { a ->
-                androidx.compose.runtime.key(a.project.id) { ActiveProjectDashboard(a, onOpenHouse = { nav.navigateToTab(HouseRoute) }) }
+                androidx.compose.runtime.key(a.project.id) {
+                    ActiveProjectDashboard(a, onOpenHouse = { nav.navigateToTab(HouseRoute) }, onOpenRadiators = { nav.navigateToTab(RadiatorsRoute) })
+                }
             }
 
             if (state.projects.isNotEmpty()) {
@@ -226,8 +240,47 @@ private fun coverageColor(c: BuildingCoverage): androidx.compose.ui.graphics.Col
     }
 }
 
+/** Indicateur de la grille du tableau de bord. */
+private data class Kpi(
+    val title: String,
+    val value: String,
+    val icon: ImageVector,
+    val detail: String? = null,
+    val accent: Color? = null,
+)
+
+/**
+ * Indicateurs deux par ligne (hauteurs égales) si chaque carte garde au moins 140 dp agrandis avec la police
+ * système ; sinon un par ligne, pour que les valeurs ne soient jamais coupées au milieu des mots.
+ */
 @Composable
-private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) {
+private fun KpiGrid(items: List<Kpi>) {
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val gap = 10.dp
+        val twoColumns = (maxWidth - gap) / 2 >= 140.dp * fontScale
+        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+            if (twoColumns) {
+                items.chunked(2).forEach { row ->
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        row.forEach { k ->
+                            KpiCard(k.title, k.value, Modifier.weight(1f).fillMaxHeight(), icon = k.icon, detail = k.detail, accent = k.accent)
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            } else {
+                items.forEach { k -> KpiCard(k.title, k.value, Modifier.fillMaxWidth(), icon = k.icon, detail = k.detail, accent = k.accent) }
+            }
+        }
+    }
+}
+
+/** « 1 pièce », « 3 pièces » (singulier pour 0 et 1). */
+private fun plural(n: Int, word: String) = "$n ${if (n > 1) "${word}s" else word}"
+
+@Composable
+private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit, onOpenRadiators: () -> Unit) {
     val r = p.result
     val hl = r.heatLoss
     val coverage = r.studyCoverage
@@ -245,33 +298,35 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
             Button(onClick = onOpenHouse) { Text("Saisir les pièces") }
             return@SectionCard
         }
-        val cards = listOf(
-            Triple("Surface habitable", Fmt.area(hl.heatedAreaM2), Icons.Filled.Straighten),
-            Triple("Volume chauffé", Fmt.volume(hl.heatedVolumeM3), Icons.Filled.Layers),
-            Triple("Puissance nécessaire", Fmt.kw(hl.totalW), Icons.Filled.Bolt),
-            Triple("Pièces", "${p.project.building.rooms.size}", Icons.Filled.House),
-            Triple("Radiateurs validés", "${r.validatedRadiatorCount} / ${r.radiatorCount}", Icons.Filled.ViewColumn),
-            Triple("Besoins couverts à ${coverage.supplyC.toInt()} °C", Fmt.coverage(coverage), Icons.Filled.CheckCircle),
-            Triple("Départ nécessaire", Fmt.supply(r.supply), Icons.Filled.Thermostat),
-            Triple("Compatibilité PAC", r.compatibility.label, Icons.Filled.Science),
-        )
-        cards.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEachIndexed { i, (t, v, icon) ->
-                    val accent = when {
-                        t.startsWith("Besoins") -> coverageColor
-                        t.startsWith("Compatibilité") -> compatibilityColor(r.compatibility)
-                        else -> null
-                    }
-                    KpiCard(t, v, Modifier.weight(1f), icon = icon, accent = accent,
-                        detail = if (t == "Puissance nécessaire") "${Fmt.num(hl.wattsPerM2, 0)} W/m² · H = ${Fmt.num(hl.totalHWk, 0)} W/K" else null)
-                }
-                if (row.size == 1) androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-            }
+        val noRadiator = r.validatedRadiatorCount == 0
+        // L'essentiel d'abord, sur toute la largeur : les valeurs en toutes lettres y restent lisibles.
+        KpiCard("Puissance nécessaire", Fmt.kw(hl.totalW), Modifier.fillMaxWidth(), icon = Icons.Filled.Bolt,
+            detail = "${Fmt.num(hl.wattsPerM2, 0)} W/m² · H = ${Fmt.num(hl.totalHWk, 0)} W/K")
+        if (noRadiator) {
+            // Sans radiateur validé, couverture et compatibilité restent indéterminées : on indique quoi faire.
+            InfoBanner(
+                if (r.radiatorCount == 0) "Aucun radiateur saisi : scannez ou ajoutez les radiateurs pour savoir s'ils couvrent les besoins et si une PAC convient."
+                else "Aucun radiateur validé : vérifiez et validez les radiateurs saisis pour savoir s'ils couvrent les besoins et si une PAC convient.",
+            )
+            OutlinedButton(onClick = onOpenRadiators) { Text("Voir les radiateurs") }
         }
+        KpiCard("Compatibilité PAC", r.compatibility.label, Modifier.fillMaxWidth(), icon = Icons.Filled.Science,
+            accent = compatibilityColor(r.compatibility), detail = r.compatibility.description)
+        KpiCard("Température de départ nécessaire", Fmt.supply(r.supply), Modifier.fillMaxWidth(), icon = Icons.Filled.Thermostat)
+        KpiGrid(
+            listOf(
+                // Espace insécable : « 55 °C » ne se coupe pas dans le titre (deux lignes au plus).
+                Kpi("Couverture à ${coverage.supplyC.toInt()}\u00A0°C", if (noRadiator) "–" else Fmt.coverage(coverage), Icons.Filled.CheckCircle,
+                    detail = if (noRadiator) "Aucun radiateur validé" else "Part des besoins couverts",
+                    accent = if (noRadiator) null else coverageColor),
+                Kpi("Radiateurs validés", "${r.validatedRadiatorCount} / ${r.radiatorCount}", Icons.Filled.ViewColumn),
+                Kpi("Surface habitable", Fmt.area(hl.heatedAreaM2), Icons.Filled.Straighten, detail = plural(p.project.building.rooms.size, "pièce")),
+                Kpi("Volume chauffé", Fmt.volume(hl.heatedVolumeM3), Icons.Filled.Layers),
+            ),
+        )
         if (hl.uncertainShare > 0.3) {
             InfoBanner("${Fmt.pct(hl.uncertainShare)} des déperditions par les parois reposent sur des valeurs estimées ou inconnues.",
-                kind = fr.thermohabitat.pro.ui.components.BannerKind.WARNING)
+                kind = BannerKind.WARNING)
         }
     }
 
@@ -289,16 +344,19 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit) 
                     detail = "${Fmt.area(room.floorAreaM2)} · ${Fmt.num(room.wattsPerM2, 0)} W/m² · disponible à ${r.studyCoverage.supplyC.toInt()} °C : ${Fmt.watts(cov?.availableW)}")
             })
         }
-        SectionCard("Couverture selon le régime d'eau", subtitle = "Part des besoins couverts par les radiateurs validés") {
-            HorizontalBarChart(
-                r.regimeCoverages.map { c ->
-                    val color = coverageColor(c)
-                    BarEntry("${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", c.coveredFraction, color,
-                        "Puissance disponible ${Fmt.watts(c.totalAvailableW)} pour ${Fmt.watts(c.totalNeedW)} de besoins")
-                },
-                maxValue = 1.0,
-                valueFormatter = { Fmt.pct(it) },
-            )
+        // Sans radiateur validé, toutes les barres vaudraient 0 % : la carte d'accueil explique déjà la marche à suivre.
+        if (r.validatedRadiatorCount > 0) {
+            SectionCard("Couverture selon le régime d'eau", subtitle = "Part des besoins couverts par les radiateurs validés") {
+                HorizontalBarChart(
+                    r.regimeCoverages.map { c ->
+                        val color = coverageColor(c)
+                        BarEntry("${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", c.coveredFraction, color,
+                            "Puissance disponible ${Fmt.watts(c.totalAvailableW)} pour ${Fmt.watts(c.totalNeedW)} de besoins")
+                    },
+                    maxValue = 1.0,
+                    valueFormatter = { Fmt.pct(it) },
+                )
+            }
         }
     }
 }
@@ -333,11 +391,21 @@ private fun ProjectCard(p: AnalyzedProject, active: Boolean, onClick: () -> Unit
                     DropdownMenuItem(text = { Text("Supprimer le projet") }, leadingIcon = { Icon(Icons.Filled.Delete, null) }, onClick = { menu = false; onDelete() })
                 }
             }
-            Text("${Fmt.area(r.heatLoss.heatedAreaM2)} · ${Fmt.volume(r.heatLoss.heatedVolumeM3)} · ${p.project.building.rooms.size} pièces · ${r.radiatorCount} radiateurs",
-                style = MaterialTheme.typography.bodyMedium)
-            Text("Besoin ${Fmt.kw(r.heatLoss.totalW)} · couverture ${Fmt.coverage(r.studyCoverage)} à ${r.studyCoverage.supplyC.toInt()} °C · départ ${r.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}",
-                style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (p.project.building.rooms.isEmpty()) {
+                // Pas de « 0,00 kW » ni de couverture sans objet : l'étude reste à compléter.
+                Text("Étude à compléter : aucune pièce saisie", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Text("${Fmt.area(r.heatLoss.heatedAreaM2)} · ${Fmt.volume(r.heatLoss.heatedVolumeM3)} · ${plural(p.project.building.rooms.size, "pièce")} · ${plural(r.radiatorCount, "radiateur")}",
+                    style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    if (r.validatedRadiatorCount == 0) "Besoin ${Fmt.kw(r.heatLoss.totalW)} · aucun radiateur validé"
+                    else "Besoin ${Fmt.kw(r.heatLoss.totalW)} · couverture ${Fmt.coverage(r.studyCoverage)} à ${r.studyCoverage.supplyC.toInt()} °C · départ ${r.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            // Puces sur plusieurs lignes : « Projet actif » n'est plus écrasée par une longue puce PAC.
+            ActionRow {
                 StatusChip(
                     when (r.compatibility) {
                         PacCompatibility.VERY_FAVORABLE, PacCompatibility.FAVORABLE -> CoverageStatus.SUFFICIENT

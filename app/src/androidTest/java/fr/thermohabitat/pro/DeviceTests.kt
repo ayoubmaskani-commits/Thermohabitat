@@ -81,6 +81,6 @@ class NavigationTest {
         listOf("Maison", "Radiateurs", "Simulations", "Rapports").forEach { tab ->
             compose.onNodeWithText(tab, useUnmergedTree = true).performClick()
         }
-        compose.onNodeWithText("Rapports et sauvegardes").assertExists()
+        compose.onNodeWithText("Importer une sauvegarde").assertExists()
     }
 }

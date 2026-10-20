@@ -3,10 +3,13 @@ package fr.thermohabitat.pro.ui.house
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
@@ -29,9 +32,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -42,11 +45,16 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.domain.AnalyzedProject
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.ActionRow
+import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.DropdownField
 import fr.thermohabitat.pro.ui.components.EmptyState
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.FloorPlan
+import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
+import fr.thermohabitat.pro.ui.components.KpiCard
 import fr.thermohabitat.pro.ui.components.LegendDot
 import fr.thermohabitat.pro.ui.components.NumberField
 import fr.thermohabitat.pro.ui.components.PlanRoom
@@ -56,6 +64,7 @@ import fr.thermohabitat.pro.ui.components.SectionCard
 import fr.thermohabitat.pro.ui.components.StatusChip
 import fr.thermohabitat.pro.ui.components.TextInput
 import fr.thermohabitat.pro.ui.components.ValueRow
+import fr.thermohabitat.pro.ui.components.readableOn
 import fr.thermohabitat.pro.ui.components.statusColor
 import fr.thermohabitat.pro.ui.navigation.BuildingEditRoute
 import fr.thermohabitat.pro.ui.navigation.HomeRoute
@@ -116,68 +125,98 @@ fun HouseScreen(nav: NavController, vm: HouseViewModel = hiltViewModel()) {
         }
         if (p == null) return@ScreenScaffold
         val hl = p.result.heatLoss
+        val allRooms = p.project.building.rooms
         ScrollColumn(padding) {
-            SectionCard("Synthèse du bâtiment", icon = Icons.Filled.House) {
-                ValueRow("Surface chauffée (somme des pièces)", Fmt.area(hl.heatedAreaM2))
-                p.project.entity.declaredLivingAreaM2?.let { declared ->
-                    ValueRow("Surface habitable déclarée", Fmt.area(declared))
-                }
-                ValueRow("Volume chauffé", Fmt.volume(hl.heatedVolumeM3))
-                ValueRow("Température extérieure de base", Fmt.temp(hl.designOutdoorC))
-                ValueRow("Coefficient de déperdition H", "${Fmt.num(hl.totalHWk, 1)} W/K")
-                ValueRow("Puissance de chauffage nécessaire", Fmt.kw(hl.totalW), emphasize = true)
-                ValueRow("Somme des besoins des pièces", Fmt.kw(hl.sumOfRoomLoadsW))
-                OutlinedButton(onClick = { nav.navigate(MaterialsRoute) }) {
-                    Icon(Icons.Filled.Layers, null); Text("  Bibliothèque de matériaux")
-                }
-            }
-
-            if (p.project.building.rooms.isEmpty()) {
-                EmptyState("Aucune pièce", "Ajoutez les pièces chauffées de votre logement : dimensions, parois, fenêtres…",
+            // Étude sans pièce : on guide vers la saisie au lieu d'afficher des résultats à zéro.
+            if (allRooms.isEmpty()) {
+                EmptyState("Aucune pièce", "Ajoutez les pièces chauffées (dimensions, parois, fenêtres). La puissance de chauffage sera calculée ensuite.",
                     actionLabel = "Ajouter une pièce", onAction = { showAdd = true })
+                MaterialsLibraryButton { nav.navigate(MaterialsRoute) }
                 return@ScrollColumn
             }
 
-            val floors = p.project.building.rooms.map { it.floorLevel }.distinct().sorted()
+            // Résultat principal en tête.
+            KpiCard("Puissance de chauffage nécessaire", Fmt.kw(hl.totalW), Modifier.fillMaxWidth(), icon = Icons.Filled.House,
+                detail = "Par ${Fmt.temp(hl.designOutdoorC)} extérieur · ${Fmt.area(hl.heatedAreaM2)} chauffés")
+            val incomplete = allRooms.count { it.surfaces.isEmpty() }
+            if (incomplete > 0) {
+                InfoBanner("$incomplete pièce(s) sans paroi : la puissance affichée est incomplète (air seulement pour ces pièces).",
+                    kind = BannerKind.WARNING)
+            }
+
+            val floors = allRooms.map { it.floorLevel }.distinct().sorted()
             var floor by remember(floors) { mutableIntStateOf(floors.first()) }
             SectionCard("Plan simplifié", icon = Icons.Filled.Map, subtitle = "Touchez une pièce pour l'ouvrir · appui long puis glisser pour la déplacer") {
                 ChoiceChips(floors, floor, { floorLabel(it) }, { floor = it })
                 val coverage = p.result.studyCoverage
-                val rooms = p.project.building.rooms.filter { it.floorLevel == floor }.map { r ->
+                val rooms = allRooms.filter { it.floorLevel == floor }.map { r ->
                     val c = coverage.rooms.firstOrNull { it.roomId == r.id }
                     PlanRoom(r.id, r.name, r.lengthM, r.widthM, r.planX, r.planY,
                         statusColor(c?.status ?: CoverageStatus.NO_NEED),
-                        caption = c?.let { "${Fmt.watts(it.needW)} · ${Fmt.pct(if (it.needW > 0) it.availableW / it.needW else 1.0)}" })
+                        caption = c?.let {
+                            when {
+                                it.needW <= 0 -> "Pas de besoin"
+                                it.status == CoverageStatus.NO_EMITTER -> "${Fmt.watts(it.needW)} · sans radiateur"
+                                else -> "${Fmt.watts(it.needW)} · couvert à ${Fmt.pct(it.availableW / it.needW)}"
+                            }
+                        })
                 }
                 FloorPlan(rooms, onRoomClick = { nav.navigate(RoomEditRoute(it)) }, onRoomMoved = { id, x, y -> vm.moveRoom(id, x, y) })
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ActionRow {
                     val s = LocalStatusColors.current
-                    LegendDot(s.sufficient, "Suffisant"); LegendDot(s.limit, "Limite"); LegendDot(s.insufficient, "Insuffisant")
+                    LegendDot(s.sufficient, "Suffisant"); LegendDot(s.limit, "Limite")
+                    LegendDot(s.insufficient, "Insuffisant ou sans radiateur"); LegendDot(s.neutral, "Pas de besoin")
                 }
-                Text("Couverture évaluée au régime d'étude ${coverage.supplyC.toInt()}/${coverage.returnC?.toInt() ?: "–"} °C (radiateurs validés).",
-                    style = MaterialTheme.typography.bodySmall)
+                Text("Couverture : part du besoin fournie par les radiateurs validés, avec une eau à ${coverage.supplyC.toInt()} °C.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
 
             floors.forEach { level ->
                 Text(floorLabel(level), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                p.project.building.rooms.filter { it.floorLevel == level }.forEach { room ->
+                allRooms.filter { it.floorLevel == level }.forEach { room ->
                     val rl = hl.room(room.id)
                     val cov = p.result.studyCoverage.rooms.firstOrNull { it.roomId == room.id }
                     val radiators = p.project.building.radiatorsIn(room.id)
                     Card(Modifier.fillMaxWidth().clickable { nav.navigate(RoomEditRoute(room.id)) }, shape = RoundedCornerShape(14.dp)) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(room.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                                cov?.let { StatusChip(it.status) }
-                            }
-                            Text("${Fmt.area(room.floorAreaM2)} · ${Fmt.volume(room.volumeM3)} · consigne ${Fmt.temp(room.setpointC, 0)} · ${room.surfaces.size} parois",
+                            // Nom seul sur sa ligne, pastille dessous : le nom n'est jamais écrasé.
+                            Text(room.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            cov?.let { StatusChip(it.status) }
+                            val parois = if (room.surfaces.isEmpty()) "" else " · ${room.surfaces.size} paroi(s)"
+                            Text("${Fmt.area(room.floorAreaM2)} · ${Fmt.volume(room.volumeM3)} · consigne ${Fmt.temp(room.setpointC, 0)}$parois",
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Déperditions ${Fmt.watts(rl?.totalW)} (${Fmt.num(rl?.wattsPerM2, 0)} W/m²) · ${radiators.size} radiateur(s) · disponible ${Fmt.watts(cov?.availableW)}",
-                                style = MaterialTheme.typography.bodyMedium)
+                            ValueRow("Besoin de chauffage", rl?.let { "${Fmt.watts(it.totalW)} · ${Fmt.num(it.wattsPerM2, 0)} W/m²" } ?: "–", emphasize = true)
+                            if (room.surfaces.isEmpty()) {
+                                Text("Aucune paroi saisie : besoin incomplet", style = MaterialTheme.typography.bodySmall,
+                                    color = readableOn(LocalStatusColors.current.limit))
+                            }
+                            val pending = cov?.pendingRadiators ?: 0
+                            ValueRow(
+                                if (radiators.isEmpty()) "Radiateurs" else "Disponible (${radiators.size} radiateur${if (radiators.size > 1) "s" else ""})",
+                                when {
+                                    radiators.isEmpty() -> "Aucun"
+                                    pending > 0 -> "${Fmt.watts(cov?.availableW)} ($pending à valider)"
+                                    else -> Fmt.watts(cov?.availableW)
+                                },
+                            )
                         }
                     }
                 }
             }
+
+            SectionCard("Détails du bâtiment", icon = Icons.Filled.House) {
+                ValueRow("Surface chauffée (pièces)", Fmt.area(hl.heatedAreaM2))
+                p.project.entity.declaredLivingAreaM2?.let { declared ->
+                    ValueRow("Surface habitable déclarée", Fmt.area(declared))
+                }
+                ValueRow("Volume chauffé", Fmt.volume(hl.heatedVolumeM3))
+                ValueRow("Température extérieure de base", Fmt.temp(hl.designOutdoorC))
+                ValueRow("Déperdition par degré d'écart (H)", "${Fmt.num(hl.totalHWk, 1)} W/K")
+                ValueRow("Somme des besoins pièce par pièce", Fmt.kw(hl.sumOfRoomLoadsW))
+                Text("La somme par pièce sert à choisir les radiateurs ; la puissance du bâtiment sert à choisir la chaudière ou la PAC.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            MaterialsLibraryButton { nav.navigate(MaterialsRoute) }
         }
     }
 
@@ -190,6 +229,14 @@ fun HouseScreen(nav: NavController, vm: HouseViewModel = hiltViewModel()) {
                 scope.launch { vm.addRoom(name, floor, usage, l, w)?.let { nav.navigate(RoomEditRoute(it)) } }
             },
         )
+    }
+}
+
+/** Accès à la bibliothèque de matériaux, en bas de l'écran (action secondaire). */
+@Composable
+private fun MaterialsLibraryButton(onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick) {
+        Icon(Icons.Filled.Layers, null); Spacer(Modifier.width(8.dp)); Text("Bibliothèque de matériaux")
     }
 }
 
@@ -211,13 +258,15 @@ private fun AddRoomDialog(defaultFloor: Int, onDismiss: () -> Unit, onCreate: (S
         onDismissRequest = onDismiss,
         title = { Text("Nouvelle pièce") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Défilant : avec une police agrandie et le clavier ouvert, aucun champ n'est rogné.
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextInput("Nom", name, { name = it })
                 DropdownField("Usage", RoomUsage.entries, usage, { it.label }, { usage = it; if (name.isBlank()) name = it.label })
-                IntField("Niveau (0 = rez-de-chaussée)", floor, { v -> v?.let { floor = it } }, min = -3, max = 20, nullable = false)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NumberField("Longueur", length, { length = it }, Modifier.weight(1f), unit = "m", min = 0.3, max = 100.0)
-                    NumberField("Largeur", width, { width = it }, Modifier.weight(1f), unit = "m", min = 0.3, max = 100.0)
+                IntField("Niveau", floor, { v -> v?.let { floor = it } }, min = -3, max = 20, nullable = false,
+                    supportingText = floorLabel(floor))
+                FieldRow(minFieldWidth = 100.dp) {
+                    NumberField("Longueur", length, { length = it }, unit = "m", min = 0.3, max = 100.0)
+                    NumberField("Largeur", width, { width = it }, unit = "m", min = 0.3, max = 100.0)
                 }
             }
         },

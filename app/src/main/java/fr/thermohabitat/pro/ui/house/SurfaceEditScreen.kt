@@ -3,8 +3,10 @@ package fr.thermohabitat.pro.ui.house
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -51,10 +53,12 @@ import fr.thermohabitat.pro.data.db.toModel
 import fr.thermohabitat.pro.data.repository.MaterialRepository
 import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.di.ApplicationScope
+import fr.thermohabitat.pro.ui.components.ActionRow
 import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.ConfirmDialog
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
 import fr.thermohabitat.pro.ui.components.NumberField
@@ -198,9 +202,9 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
 
             SectionCard("Surface") {
                 if (s.kind == SurfaceKind.WALL) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NumberField("Longueur", s.lengthM, { v -> vm.update { it.copy(lengthM = v) } }, Modifier.weight(1f), unit = "m", min = 0.0)
-                        NumberField("Hauteur", s.heightM, { v -> vm.update { it.copy(heightM = v) } }, Modifier.weight(1f), unit = "m", min = 0.0,
+                    FieldRow {
+                        NumberField("Longueur", s.lengthM, { v -> vm.update { it.copy(lengthM = v) } }, unit = "m", min = 0.0)
+                        NumberField("Hauteur", s.heightM, { v -> vm.update { it.copy(heightM = v) } }, unit = "m", min = 0.0,
                             supportingText = "Vide : hauteur de la pièce")
                     }
                 }
@@ -215,18 +219,22 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
 
             BoundarySection(s, state.siblings.filter { it.id != s.roomId }, vm)
 
-            SectionCard("Composition (de l'intérieur vers l'extérieur)", icon = Icons.Filled.Layers) {
+            SectionCard("Composition", icon = Icons.Filled.Layers, subtitle = "Couches de l'intérieur vers l'extérieur") {
                 val templates = CompositionTemplates.all.filter { it.kind == s.kind || (s.kind == SurfaceKind.ROOF && it.kind == SurfaceKind.CEILING) }
-                DropdownField("Appliquer une composition type", templates.map { it.code }, null, { c -> CompositionTemplates.find(c)!!.label },
+                DropdownField("Composition type", templates.map { it.code }, null, { c -> CompositionTemplates.find(c)!!.label },
                     { vm.applyTemplate(it) }, placeholder = "Choisir un modèle…", supportingText = "Remplace les couches actuelles")
                 val layers = details?.layers?.sortedBy { it.position }.orEmpty()
                 if (layers.isEmpty()) InfoBanner("Aucune couche : ajoutez les matériaux ou saisissez directement un coefficient U ci-dessous.")
                 layers.forEachIndexed { index, l ->
                     LayerRow(l, state.materials, s.kind, index == 0, index == layers.lastIndex, vm)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { addLayerInterior = true }) { Icon(Icons.Filled.Add, null); Text(" Côté intérieur") }
-                    OutlinedButton(onClick = { addLayerInterior = false }) { Icon(Icons.Filled.Add, null); Text(" Côté extérieur") }
+                ActionRow {
+                    OutlinedButton(onClick = { addLayerInterior = true }) {
+                        Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Couche côté intérieur")
+                    }
+                    OutlinedButton(onClick = { addLayerInterior = false }) {
+                        Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Couche côté extérieur")
+                    }
                 }
                 // U équivalent EN ISO 13370 tel que le bilan le calcule (hors U imposé).
                 val groundU = model?.takeIf { isGroundFloor }?.let { m ->
@@ -261,11 +269,13 @@ fun SurfaceEditScreen(nav: NavController, vm: SurfaceEditViewModel = hiltViewMod
             if (s.kind == SurfaceKind.WALL || s.kind == SurfaceKind.ROOF) {
                 SectionCard("Fenêtres et portes", icon = Icons.Filled.Window) {
                     details?.openings?.sortedBy { it.id }?.forEach { o -> OpeningEditor(o, vm) }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ActionRow {
                         OutlinedButton(onClick = { vm.addOpening(if (s.kind == SurfaceKind.ROOF) "toit_ancien" else "sv_bois", OpeningKind.WINDOW) }) {
-                            Icon(Icons.Filled.Add, null); Text(" Fenêtre")
+                            Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Fenêtre")
                         }
-                        OutlinedButton(onClick = { vm.addOpening("porte_bois_pleine", OpeningKind.DOOR) }) { Icon(Icons.Filled.Add, null); Text(" Porte") }
+                        OutlinedButton(onClick = { vm.addOpening("porte_bois_pleine", OpeningKind.DOOR) }) {
+                            Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Porte")
+                        }
                     }
                 }
             }
@@ -291,28 +301,30 @@ private fun BoundarySection(s: SurfaceEntity, siblings: List<RoomEntity>, vm: Su
         Boundary.UNHEATED -> SectionCard("Local non chauffé adjacent", subtitle = "Coefficient b = (θint − θu) / (θint − θe)") {
             DropdownField("Type de local", UnheatedSpacePresets.all, UnheatedSpacePresets.find(s.unheatedPresetCode), { "${it.label} – b = ${Fmt.num(it.b, 1)}" },
                 { p -> vm.update { it.copy(unheatedPresetCode = p.code, unheatedFactorB = null) } })
-            NumberField("Coefficient b (saisie libre, prioritaire)", s.unheatedFactorB, { v -> vm.update { it.copy(unheatedFactorB = v) } }, decimals = 2, min = 0.0, max = 1.0)
+            NumberField("Coefficient b", s.unheatedFactorB, { v -> vm.update { it.copy(unheatedFactorB = v) } }, decimals = 2, min = 0.0, max = 1.0,
+                supportingText = "Saisie libre, prioritaire sur le type de local")
         }
         Boundary.HEATED_ROOM -> SectionCard("Pièce chauffée voisine") {
             DropdownField("Pièce de l'étude", listOf<RoomEntity?>(null) + siblings, siblings.firstOrNull { it.id == s.adjacentRoomId },
                 { it?.let { r -> "${r.name} (${Fmt.temp(r.setpointC, 0)})" } ?: "Autre / non précisée" },
                 { r -> vm.update { it.copy(adjacentRoomId = r?.id) } })
             if (s.adjacentRoomId == null) {
-                NumberField("Température de l'espace voisin", s.adjacentTemperatureC, { v -> vm.update { it.copy(adjacentTemperatureC = v) } }, unit = "°C",
-                    decimals = 1, supportingText = "Vide : consigne du bâtiment (échange nul)")
+                NumberField("Température voisine", s.adjacentTemperatureC, { v -> vm.update { it.copy(adjacentTemperatureC = v) } }, unit = "°C",
+                    decimals = 1, supportingText = "Espace voisin. Vide : consigne du bâtiment (échange nul)")
             }
         }
         Boundary.ADJACENT_BUILDING -> SectionCard("Logement ou bâtiment mitoyen") {
-            NumberField("Température supposée du mitoyen", s.adjacentTemperatureC, { v -> vm.update { it.copy(adjacentTemperatureC = v) } }, unit = "°C",
-                decimals = 1, supportingText = "Vide : 15 °C supposés")
+            NumberField("Température du mitoyen", s.adjacentTemperatureC, { v -> vm.update { it.copy(adjacentTemperatureC = v) } }, unit = "°C",
+                decimals = 1, supportingText = "Valeur supposée. Vide : 15 °C")
         }
         Boundary.GROUND -> if (s.kind != SurfaceKind.FLOOR) {
             InfoBanner("Le contact avec le sol n'est calculé que pour les planchers : cette paroi est traitée comme donnant sur l'extérieur. " +
                 "Choisissez « Extérieur » ou corrigez le type de paroi.", kind = BannerKind.WARNING)
         } else SectionCard("Contact avec le sol (EN ISO 13370)") {
-            NumberField("Périmètre exposé de ce plancher", s.groundExposedPerimeterM, { v -> vm.update { it.copy(groundExposedPerimeterM = v) } }, unit = "m",
+            NumberField("Périmètre exposé", s.groundExposedPerimeterM, { v -> vm.update { it.copy(groundExposedPerimeterM = v) } }, unit = "m",
                 decimals = 2, min = 0.0, supportingText = "Longueur des murs extérieurs bordant ce plancher")
-            NumberField("Épaisseur des murs périphériques", s.groundWallThicknessM, { v -> vm.update { it.copy(groundWallThicknessM = v) } }, unit = "m", decimals = 2, min = 0.0)
+            NumberField("Épaisseur des murs", s.groundWallThicknessM, { v -> vm.update { it.copy(groundWallThicknessM = v) } }, unit = "m", decimals = 2, min = 0.0,
+                supportingText = "Murs périphériques du plancher")
             NumberField("Conductivité du sol", s.groundConductivity, { v -> vm.update { it.copy(groundConductivity = v) } }, unit = "W/(m·K)", decimals = 1,
                 min = 0.5, max = 4.0, supportingText = "2,0 par défaut (argile, limon) ; 1,5 sable sec ; 3,5 roche")
             SwitchRow("Nappe phréatique à moins d'1 m", s.groundShallowWater, { v -> vm.update { it.copy(groundShallowWater = v) } })
@@ -326,17 +338,20 @@ private fun LayerRow(l: LayerEntity, materials: List<MaterialEntity>, kind: Surf
     val material = materials.firstOrNull { it.id == l.materialId }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Le nom du matériau garde toute la largeur ; les actions sont sur leur propre ligne.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(material?.name ?: "Matériau supprimé", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                material?.let { OriginBadge(it.origin) }
+                material?.let { Spacer(Modifier.width(8.dp)); OriginBadge(it.origin) }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 IconButton(onClick = { vm.moveLayer(l.id, -1) }, enabled = !first) { Icon(Icons.Filled.ArrowUpward, "Vers l'intérieur") }
                 IconButton(onClick = { vm.moveLayer(l.id, 1) }, enabled = !last) { Icon(Icons.Filled.ArrowDownward, "Vers l'extérieur") }
                 IconButton(onClick = { vm.deleteLayer(l.id) }) { Icon(Icons.Filled.Delete, "Supprimer la couche") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Épaisseur", l.thicknessM * 100, { v -> v?.let { vm.updateLayer(l.copy(thicknessM = it / 100)) } }, Modifier.weight(1f),
+            FieldRow {
+                NumberField("Épaisseur", l.thicknessM * 100, { v -> v?.let { vm.updateLayer(l.copy(thicknessM = it / 100)) } },
                     unit = "cm", decimals = 1, nullable = false, min = 0.1, max = 200.0)
-                NumberField("λ spécifique", l.lambdaOverride, { v -> vm.updateLayer(l.copy(lambdaOverride = v)) }, Modifier.weight(1f),
+                NumberField("λ spécifique", l.lambdaOverride, { v -> vm.updateLayer(l.copy(lambdaOverride = v)) },
                     unit = "W/(m·K)", decimals = 3, min = 0.005, max = 10.0, supportingText = "Vide : λ ${Fmt.num(material?.lambda, 3)}")
             }
             if (material != null) {
@@ -380,21 +395,20 @@ private fun OpeningEditor(o: OpeningEntity, vm: SurfaceEditViewModel) {
             }
             ChoiceChips(OpeningKind.entries, o.kind, { it.label }, { k -> vm.updateOpening(o.copy(kind = k)) })
             TextInput("Libellé", o.label, { v -> vm.updateOpening(o.copy(label = v)) })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("Largeur", o.widthM, { v -> v?.let { vm.updateOpening(o.copy(widthM = it)) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.05, max = 20.0)
-                NumberField("Hauteur", o.heightM, { v -> v?.let { vm.updateOpening(o.copy(heightM = it)) } }, Modifier.weight(1f), unit = "m", nullable = false, min = 0.05, max = 10.0)
-                IntField("Nombre", o.count, { v -> v?.let { vm.updateOpening(o.copy(count = it.coerceAtLeast(1))) } }, Modifier.weight(0.8f), min = 1, max = 50, nullable = false)
+            FieldRow(minFieldWidth = 100.dp) {
+                NumberField("Largeur", o.widthM, { v -> v?.let { vm.updateOpening(o.copy(widthM = it)) } }, unit = "m", nullable = false, min = 0.05, max = 20.0)
+                NumberField("Hauteur", o.heightM, { v -> v?.let { vm.updateOpening(o.copy(heightM = it)) } }, unit = "m", nullable = false, min = 0.05, max = 10.0)
             }
+            IntField("Nombre", o.count, { v -> v?.let { vm.updateOpening(o.copy(count = it.coerceAtLeast(1))) } }, min = 1, max = 50, nullable = false)
             val presets = if (o.kind == OpeningKind.DOOR) OpeningPresets.doors else OpeningPresets.windows
             DropdownField("Type (valeur indicative)", presets, OpeningPresets.find(o.presetCode), { "${it.label} – U ≈ ${Fmt.num(it.uValue, 1)}" },
                 { p -> vm.updateOpening(o.copy(presetCode = p.code, uValue = p.uValue, gValue = p.gValue, frameFraction = p.frameFraction,
                     uOrigin = fr.thermohabitat.thermal.model.ValueOrigin.ESTIMATED)) })
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumberField("U", o.uValue, { v -> v?.let { vm.updateOpening(o.copy(uValue = it, presetCode = null)) } }, Modifier.weight(1f),
-                    unit = "W/(m²·K)", decimals = 2, nullable = false, min = 0.3, max = 7.0)
-                if (o.kind != OpeningKind.DOOR) {
-                    NumberField("Facteur solaire g", o.gValue, { v -> v?.let { vm.updateOpening(o.copy(gValue = it)) } }, Modifier.weight(1f), decimals = 2, nullable = false, min = 0.0, max = 1.0)
-                }
+            // Unité longue : U et g en pleine largeur pour que la valeur saisie reste visible.
+            NumberField("U", o.uValue, { v -> v?.let { vm.updateOpening(o.copy(uValue = it, presetCode = null)) } },
+                unit = "W/(m²·K)", decimals = 2, nullable = false, min = 0.3, max = 7.0)
+            if (o.kind != OpeningKind.DOOR) {
+                NumberField("Facteur solaire g", o.gValue, { v -> v?.let { vm.updateOpening(o.copy(gValue = it)) } }, decimals = 2, nullable = false, min = 0.0, max = 1.0)
             }
             OriginSelector(o.uOrigin, { org -> vm.updateOpening(o.copy(uOrigin = org)) })
         }

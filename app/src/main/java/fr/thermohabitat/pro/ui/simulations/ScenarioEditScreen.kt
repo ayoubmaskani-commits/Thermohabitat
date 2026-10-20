@@ -3,6 +3,9 @@ package fr.thermohabitat.pro.ui.simulations
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -24,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -39,6 +43,7 @@ import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.domain.StudyService
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.DropdownField
+import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.NumberField
 import fr.thermohabitat.pro.ui.components.ScreenScaffold
@@ -80,6 +85,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 @HiltViewModel
 class ScenarioEditViewModel @Inject constructor(
@@ -142,9 +148,17 @@ fun ScenarioEditScreen(nav: NavController, vm: ScenarioEditViewModel = hiltViewM
                         }
                     }
                 }
-                OutlinedButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, null); Text(" Ajouter une modification") }
+                OutlinedButton(onClick = { adding = true }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.width(8.dp)); Text("Ajouter une modification")
+                }
             }
-            comparison?.let { c -> ComparisonSection(c) }
+            val c = comparison
+            when {
+                c == null -> Unit // calcul en cours
+                // Sans déperdition calculée, le comparatif n'afficherait que des zéros.
+                c.before.heatLoss.totalW <= 0.0 -> InfoBanner("Le comparatif avant / après apparaîtra dès que des pièces avec leurs parois seront saisies.")
+                else -> ComparisonSection(c)
+            }
         }
     }
     if (adding) {
@@ -163,7 +177,9 @@ private fun ComparisonSection(c: ScenarioComparison) {
     val b = c.before; val a = c.after
     SectionCard("Comparateur avant / après", icon = Icons.Filled.SwapHoriz) {
         ValueRow("Déperditions totales", "${Fmt.kw(b.heatLoss.totalW)} → ${Fmt.kw(a.heatLoss.totalW)}", emphasize = true)
-        ValueRow("Réduction", "${Fmt.watts(c.heatLossReductionW)} (${Fmt.pct(c.heatLossReductionPct)})")
+        // Un scénario peut aussi augmenter les déperditions (consigne relevée, ventilation) : pas de « −-8 % ».
+        ValueRow(if (c.heatLossReductionW >= 0) "Réduction" else "Augmentation",
+            "${Fmt.watts(abs(c.heatLossReductionW))} (${Fmt.pct(abs(c.heatLossReductionPct))})")
         ValueRow("Coefficient H", "${Fmt.num(b.heatLoss.totalHWk, 0)} → ${Fmt.num(a.heatLoss.totalHWk, 0)} W/K")
         HorizontalDivider()
         LossCategory.entries.forEach { cat ->
@@ -173,7 +189,7 @@ private fun ComparisonSection(c: ScenarioComparison) {
         HorizontalDivider()
         ValueRow("Régime étudié", "${b.studyCoverage.supplyC.toInt()} → ${a.studyCoverage.supplyC.toInt()} °C")
         ValueRow("Besoins couverts", "${Fmt.coverage(b.studyCoverage)} → ${Fmt.coverage(a.studyCoverage)}")
-        ValueRow("Départ nécessaire", "${b.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "–"} → ${a.supply.requiredSupplyC?.let { Fmt.temp(it) } ?: "–"}")
+        ValueRow("Départ nécessaire", scenarioSupplyChange(b.supply, a.supply, 1))
         ValueRow("Compatibilité PAC", "${b.compatibility.label} → ${a.compatibility.label}")
         HorizontalDivider()
         ValueRow("Besoins annuels de chauffage", "${Fmt.num(b.energy.annualNeedKwh, 0)} → ${Fmt.num(a.energy.annualNeedKwh, 0)} kWh")
@@ -185,11 +201,11 @@ private fun ComparisonSection(c: ScenarioComparison) {
         Text("Pièce par pièce", style = MaterialTheme.typography.labelLarge)
         a.studyCoverage.rooms.forEach { ra ->
             val rb = b.studyCoverage.rooms.firstOrNull { it.roomId == ra.roomId }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(ra.roomName, style = MaterialTheme.typography.bodyMedium)
-                    Text("Besoin ${Fmt.watts(rb?.needW)} → ${Fmt.watts(ra.needW)} · dispo ${Fmt.watts(ra.availableW)}", style = MaterialTheme.typography.bodySmall)
-                }
+            // Nom, valeurs puis statut empilés : la puce longue (« Aucun émetteur validé ») n'écrase plus le texte.
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(ra.roomName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                ValueRow("Besoin", "${Fmt.watts(rb?.needW)} → ${Fmt.watts(ra.needW)}")
+                ValueRow("Puissance disponible", "${Fmt.watts(rb?.availableW)} → ${Fmt.watts(ra.availableW)}")
                 StatusChip(ra.status)
             }
         }
@@ -288,8 +304,8 @@ private fun AddModificationDialog(
                         }
                     }
                     ModKind.WINDOWS -> {
-                        DropdownField("Menuiserie (valeur indicative)", OpeningPresets.windows, null, { "${it.label} – Uw ${Fmt.num(it.uValue, 1)}" },
-                            { u = it.uValue; g = it.gValue }, placeholder = "Choisir…")
+                        DropdownField("Menuiserie type", OpeningPresets.windows, null, { "${it.label} – Uw ${Fmt.num(it.uValue, 1)}" },
+                            { u = it.uValue; g = it.gValue }, placeholder = "Choisir…", supportingText = "Valeurs indicatives, modifiables ci-dessous")
                         NumberField("Uw", u, { u = it }, unit = "W/(m²·K)", decimals = 2, min = 0.5, max = 6.0)
                         NumberField("Facteur solaire g", g, { g = it }, decimals = 2, min = 0.1, max = 0.9)
                     }
@@ -300,21 +316,25 @@ private fun AddModificationDialog(
                     }
                     ModKind.VENTILATION -> {
                         DropdownField("Système", VentilationType.entries, ventType, { it.label }, { ventType = it })
-                        NumberField("Débit (vide : débits minimaux)", flow, { flow = it }, unit = "m³/h", decimals = 0, min = 0.0)
-                        if (ventType == VentilationType.BALANCED) NumberField("Efficacité de récupération", efficiency, { efficiency = it }, unit = "%", decimals = 0, min = 0.0, max = 95.0)
+                        NumberField("Débit", flow, { flow = it }, unit = "m³/h", decimals = 0, min = 0.0, supportingText = "Vide : débits minimaux")
+                        if (ventType == VentilationType.BALANCED) NumberField("Récupération", efficiency, { efficiency = it }, unit = "%", decimals = 0, min = 0.0, max = 95.0,
+                            supportingText = "Efficacité de l'échangeur")
                     }
-                    ModKind.SETPOINT -> NumberField("Consigne de toutes les pièces", setpoint, { setpoint = it }, unit = "°C", decimals = 1, min = 10.0, max = 26.0)
-                    ModKind.BRIDGES -> NumberField("ΔU_TB après traitement", deltaU, { deltaU = it }, unit = "W/(m²·K)", decimals = 2, min = 0.0, max = 0.3)
+                    ModKind.SETPOINT -> NumberField("Consigne", setpoint, { setpoint = it }, unit = "°C", decimals = 1, min = 10.0, max = 26.0,
+                        supportingText = "Appliquée à toutes les pièces")
+                    ModKind.BRIDGES -> NumberField("ΔU_TB visé", deltaU, { deltaU = it }, unit = "W/(m²·K)", decimals = 2, min = 0.0, max = 0.3,
+                        supportingText = "Majoration ponts thermiques après traitement")
                     ModKind.REPLACE_RADIATOR, ModKind.ADD_RADIATOR -> {
                         if (kind == ModKind.REPLACE_RADIATOR) DropdownField("Radiateur remplacé", radiators, radiator, { "${it.code} · ${it.label.ifBlank { it.type.label }}" }, { radiator = it })
                         else DropdownField("Pièce", rooms, room, { it.name }, { room = it })
                         Text("Nouveau radiateur : panneau acier ou puissance documentée", style = MaterialTheme.typography.labelLarge)
                         DropdownField("Type de panneau", PanelType.entries, panel, { it.label }, { panel = it })
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            NumberField("Hauteur", heightMm, { heightMm = it }, Modifier.weight(1f), unit = "mm", decimals = 0, min = 200.0, max = 2500.0)
-                            NumberField("Longueur", lengthMm, { lengthMm = it }, Modifier.weight(1f), unit = "mm", decimals = 0, min = 200.0, max = 3000.0)
+                        FieldRow {
+                            NumberField("Hauteur", heightMm, { heightMm = it }, unit = "mm", decimals = 0, min = 200.0, max = 2500.0)
+                            NumberField("Longueur", lengthMm, { lengthMm = it }, unit = "mm", decimals = 0, min = 200.0, max = 3000.0)
                         }
-                        NumberField("Ou puissance nominale documentée (75/65/20)", nominal, { nominal = it }, unit = "W", decimals = 0, min = 50.0)
+                        NumberField("Puissance nominale", nominal, { nominal = it }, unit = "W", decimals = 0, min = 50.0,
+                            supportingText = "Facultatif : puissance documentée à 75/65/20 °C, remplace le panneau")
                     }
                 }
                 result?.let { Text("→ ${it.description}", style = MaterialTheme.typography.bodySmall) }

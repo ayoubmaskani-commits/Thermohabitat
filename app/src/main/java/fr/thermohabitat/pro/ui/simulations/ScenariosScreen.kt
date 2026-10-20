@@ -4,8 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -47,10 +49,14 @@ import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.ScreenScaffold
 import fr.thermohabitat.pro.ui.components.ScrollColumn
 import fr.thermohabitat.pro.ui.components.ValueRow
+import fr.thermohabitat.pro.ui.navigation.HomeRoute
+import fr.thermohabitat.pro.ui.navigation.HouseRoute
 import fr.thermohabitat.pro.ui.navigation.ScenarioEditRoute
+import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.ScenarioComparison
 import fr.thermohabitat.thermal.StudyAnalyzer
+import fr.thermohabitat.thermal.calc.BuildingSupplyRequirement
 import fr.thermohabitat.thermal.calc.EnergyCarrier
 import fr.thermohabitat.thermal.calc.Regime
 import fr.thermohabitat.thermal.library.MaterialLibrary
@@ -69,6 +75,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 /** Modèles de scénarios proposés comme point de départ (modifiables). */
 object ScenarioTemplates {
@@ -98,6 +105,23 @@ object ScenarioTemplates {
 }
 
 data class ScenarioRow(val id: Long, val comparison: ScenarioComparison)
+
+/** Variation des déperditions avec le bon signe : « −12 % » pour une baisse, « +8 % » pour une hausse. */
+internal fun scenarioHeatLossDelta(c: ScenarioComparison): String {
+    val r = c.heatLossReductionPct
+    return when {
+        abs(r) < 0.005 -> "stable"
+        r > 0 -> "−${Fmt.pct(r)}"
+        else -> "+${Fmt.pct(-r)}"
+    }
+}
+
+/** Départ nécessaire avant → après ; une seule mention explicite (« Indéterminée… ») si rien ne change. */
+internal fun scenarioSupplyChange(before: BuildingSupplyRequirement, after: BuildingSupplyRequirement, decimals: Int = 0): String {
+    val b = Fmt.supply(before, decimals)
+    val a = Fmt.supply(after, decimals)
+    return if (before.requiredSupplyC == null && b == a) a else "$b → $a"
+}
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -134,27 +158,41 @@ fun ScenariosScreen(nav: NavController, vm: ScenariosViewModel = hiltViewModel()
         title = "Scénarios d'amélioration",
         onBack = { nav.popBackStack() },
         floatingActionButton = {
-            if (p != null) ExtendedFloatingActionButton(onClick = { showTemplates = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("Nouveau scénario") })
+            // Sans pièce, un scénario n'aurait rien à comparer : la création passe par l'état vide ci-dessous.
+            if (p?.project?.building?.rooms?.isNotEmpty() == true) ExtendedFloatingActionButton(onClick = { showTemplates = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("Nouveau scénario") })
         },
     ) { padding ->
         ScrollColumn(padding) {
-            val a: AnalyzedProject = p ?: return@ScrollColumn
+            val a: AnalyzedProject? = p
+            if (a == null) {
+                EmptyState("Aucune étude ouverte", "Ouvrez ou créez une étude depuis l'accueil pour comparer des scénarios de travaux.",
+                    actionLabel = "Aller à l'accueil", onAction = { nav.navigateToTab(HomeRoute) })
+                return@ScrollColumn
+            }
+            if (a.project.building.rooms.isEmpty()) {
+                // Sans pièce, toutes les valeurs seraient nulles (« 0,00 kW → 0,00 kW ») : on guide vers la saisie.
+                EmptyState("Aucune pièce saisie", "Un scénario compare la maison avant et après travaux : saisissez d'abord les pièces et leurs parois.",
+                    actionLabel = "Saisir la maison", onAction = { nav.navigateToTab(HouseRoute) })
+                return@ScrollColumn
+            }
             InfoBanner("Chaque scénario est appliqué à une copie de l'étude : déperditions, besoins, couverture des radiateurs, température de départ et consommations sont recalculés.")
-            if (rows.isEmpty()) EmptyState("Aucun scénario", "Créez un scénario à partir d'un modèle : isolation, fenêtres, combles, radiateurs, basse température…")
+            if (rows.isEmpty()) EmptyState("Aucun scénario", "Partez d'un modèle : isolation, fenêtres, combles, radiateurs, basse température…",
+                actionLabel = "Choisir un modèle", onAction = { showTemplates = true })
             rows.forEach { row ->
                 val c = row.comparison
                 Card(Modifier.fillMaxWidth().clickable { nav.navigate(ScenarioEditRoute(row.id)) }, shape = RoundedCornerShape(14.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.AutoMirrored.Filled.ShowChart, null, tint = MaterialTheme.colorScheme.primary)
-                            Text("  ${c.scenario.name}", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(8.dp))
+                            Text(c.scenario.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                             IconButton(onClick = { deleteId = row.id }) { Icon(Icons.Filled.Delete, "Supprimer") }
                         }
                         c.scenario.modifications.forEach { Text("• ${it.description}", style = MaterialTheme.typography.bodySmall) }
                         c.scenario.regime?.let { Text("• Régime étudié : ${it.label}", style = MaterialTheme.typography.bodySmall) }
                         HorizontalDivider()
-                        ValueRow("Déperditions", "${Fmt.kw(c.before.heatLoss.totalW)} → ${Fmt.kw(c.after.heatLoss.totalW)} (−${Fmt.pct(c.heatLossReductionPct)})")
-                        ValueRow("Départ nécessaire", "${c.before.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"} → ${c.after.supply.requiredSupplyC?.let { Fmt.temp(it, 0) } ?: "–"}")
+                        ValueRow("Déperditions", "${Fmt.kw(c.before.heatLoss.totalW)} → ${Fmt.kw(c.after.heatLoss.totalW)} (${scenarioHeatLossDelta(c)})")
+                        ValueRow("Départ nécessaire", scenarioSupplyChange(c.before.supply, c.after.supply))
                         ValueRow("Couverture au régime étudié", "${Fmt.coverage(c.before.studyCoverage)} → ${Fmt.coverage(c.after.studyCoverage)}")
                         ValueRow("Compatibilité PAC", "${c.before.compatibility.label} → ${c.after.compatibility.label}")
                         val pacBefore = c.before.energy.carriers.firstOrNull { it.carrier == EnergyCarrier.HEAT_PUMP }

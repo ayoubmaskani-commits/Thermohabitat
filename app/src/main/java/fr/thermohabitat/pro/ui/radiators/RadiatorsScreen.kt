@@ -25,6 +25,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,9 +45,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import fr.thermohabitat.pro.data.db.PhotoOwner
 import fr.thermohabitat.pro.data.repository.ProjectRepository
 import fr.thermohabitat.pro.domain.StudyService
+import fr.thermohabitat.pro.ui.components.BannerKind
 import fr.thermohabitat.pro.ui.components.ChoiceChips
 import fr.thermohabitat.pro.ui.components.ConfirmDialog
 import fr.thermohabitat.pro.ui.components.EmptyState
+import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.NumberField
 import fr.thermohabitat.pro.ui.components.PhotoThumbnail
 import fr.thermohabitat.pro.ui.components.ScreenScaffold
@@ -56,6 +59,7 @@ import fr.thermohabitat.pro.ui.components.StatusChip
 import fr.thermohabitat.pro.ui.components.ValueRow
 import fr.thermohabitat.pro.ui.navigation.CaptureRoute
 import fr.thermohabitat.pro.ui.navigation.HomeRoute
+import fr.thermohabitat.pro.ui.navigation.HouseRoute
 import fr.thermohabitat.pro.ui.navigation.RadiatorEditRoute
 import fr.thermohabitat.pro.ui.navigation.navigateToTab
 import fr.thermohabitat.pro.ui.util.Fmt
@@ -127,22 +131,49 @@ fun RadiatorsScreen(nav: NavController, vm: RadiatorsViewModel = hiltViewModel()
         val rooms = p.project.building.rooms.associateBy { it.id }
         fun ambientFor(r: Radiator) = ambientOverride ?: r.roomId?.let { rooms[it]?.setpointC } ?: settings.radiatorSheetAmbientC
         val outputs = radiators.associate { r -> r.id to RadiatorPower.outputOf(r, regime.supplyC, regime.returnC, ambientFor(r)) }
+        // Même critère que le bilan : validé, puissance établie, attribué à une pièce existante.
+        val validatedOut = radiators.filter { r -> RadiatorPower.countsInStudy(r) && r.roomId?.let { it in rooms } == true }
+            .mapNotNull { outputs[it.id] }
+        val need = p.result.heatLoss.sumOfRoomLoadsW
+        val newManual: () -> Unit = { scope.launch { vm.newManual()?.let { nav.navigate(RadiatorEditRoute(it)) } } }
 
         ScrollColumn(padding) {
-            SectionCard("Inventaire photographique", icon = Icons.Filled.Thermostat, subtitle = "${radiators.size} radiateur(s) · ${radiators.count { it.validated }} validé(s)") {
-                Text("Régime de chauffage", style = MaterialTheme.typography.labelLarge)
-                ChoiceChips(Regime.STANDARD, regime, { it.label }, { vm.regime.value = it })
-                NumberField("Température ambiante (vide : consigne de la pièce)", ambientOverride, { vm.ambient.value = it }, unit = "°C", decimals = 1, min = 5.0, max = 30.0)
-                // Même critère que le bilan : validé, puissance établie, attribué à une pièce existante.
-                val validatedOut = radiators.filter { r -> RadiatorPower.countsInStudy(r) && r.roomId?.let { it in rooms } == true }
-                    .mapNotNull { outputs[it.id] }
-                ValueRow("Puissance disponible (radiateurs validés) à ${regime.label}", Fmt.watts(validatedOut.sumOf { it.powerW }), emphasize = true)
-                ValueRow("Plage d'incertitude", "${Fmt.watts(validatedOut.sumOf { it.lowW })} – ${Fmt.watts(validatedOut.sumOf { it.highW })}")
-                ValueRow("Besoin du bâtiment (somme des pièces)", Fmt.watts(p.result.heatLoss.sumOfRoomLoadsW))
-                OutlinedButton(onClick = { scope.launch { vm.newManual()?.let { nav.navigate(RadiatorEditRoute(it)) } } }) { Text("Saisie manuelle d'un radiateur") }
-            }
+            // Inventaire vide : l'invitation à saisir passe avant les réglages.
             if (radiators.isEmpty()) {
-                EmptyState("Aucun radiateur", "Photographiez chaque radiateur : l'application vous guide pour l'identifier, le mesurer et estimer sa puissance.")
+                EmptyState("Aucun radiateur", "Photographiez chaque radiateur avec « Scanner un radiateur » : l'application vous guide pour l'identifier, " +
+                    "le mesurer et estimer sa puissance.", actionLabel = "Saisie manuelle", onAction = newManual)
+            }
+            SectionCard("Inventaire photographique", icon = Icons.Filled.Thermostat, subtitle = "${radiators.size} radiateur(s) · ${radiators.count { it.validated }} validé(s)") {
+                // L'essentiel d'abord : puissance disponible et besoin, sans « 0 W » qui ressemblerait à un résultat.
+                if (radiators.isNotEmpty()) {
+                    if (validatedOut.isEmpty()) {
+                        InfoBanner("Aucun radiateur validé et attribué à une pièce : ouvrez chaque fiche, vérifiez-la puis validez-la.", kind = BannerKind.WARNING)
+                    } else {
+                        // « validés » reste dans le libellé : un total partiel ne doit pas passer pour la puissance de tous les radiateurs.
+                        ValueRow("Puissance des radiateurs validés à ${regime.label}", Fmt.watts(validatedOut.sumOf { it.powerW }), emphasize = true)
+                        ValueRow("Plage d'incertitude", "${Fmt.watts(validatedOut.sumOf { it.lowW })} – ${Fmt.watts(validatedOut.sumOf { it.highW })}")
+                        val notCounted = radiators.size - validatedOut.size
+                        if (notCounted > 0) {
+                            Text("$notCounted radiateur(s) non compté(s) : à valider, à compléter ou à attribuer à une pièce.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                ValueRow("Besoin du bâtiment", when {
+                    need > 0 -> Fmt.watts(need)
+                    rooms.isEmpty() -> "Pièces à saisir"
+                    else -> "Pièces à compléter"
+                })
+                if (need <= 0) {
+                    TextButton(onClick = { nav.navigateToTab(HouseRoute) }) { Text(if (rooms.isEmpty()) "Saisir les pièces" else "Compléter les pièces") }
+                }
+                if (radiators.isNotEmpty()) {
+                    Text("Régime de chauffage", style = MaterialTheme.typography.labelLarge)
+                    ChoiceChips(Regime.STANDARD, regime, { it.label }, { vm.regime.value = it })
+                    NumberField("Température ambiante", ambientOverride, { vm.ambient.value = it }, unit = "°C", decimals = 1, min = 5.0, max = 30.0,
+                        supportingText = "Vide : consigne de chaque pièce")
+                    OutlinedButton(onClick = newManual) { Text("Saisie manuelle d'un radiateur") }
+                }
             }
             radiators.forEach { r -> androidx.compose.runtime.key(r.id) {
                 val out = outputs[r.id]
@@ -177,7 +208,13 @@ fun RadiatorsScreen(nav: NavController, vm: RadiatorsViewModel = hiltViewModel()
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            Text("À ${regime.label} : ${Fmt.watts(out?.powerW)}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            // Puissance au régime : résultat principal de la carte, jamais un « 0 W » trompeur.
+                            when {
+                                nominal == null -> Unit // « Puissance inconnue : compléter la fiche » est affiché juste au-dessus.
+                                out == null || out.powerW <= 0.0 -> Text("À ${regime.label} : non calculable, vérifiez la fiche et l'ambiance",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                else -> Text("À ${regime.label} : ${Fmt.watts(out.powerW)}", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            }
                             StatusChip(
                                 if (r.validated && r.roomId != null) CoverageStatus.SUFFICIENT else CoverageStatus.LIMIT,
                                 text = when {

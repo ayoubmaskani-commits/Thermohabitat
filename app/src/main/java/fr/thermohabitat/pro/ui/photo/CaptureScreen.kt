@@ -2,6 +2,7 @@ package fr.thermohabitat.pro.ui.photo
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -21,8 +22,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
@@ -31,12 +34,16 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,8 +60,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -80,6 +92,7 @@ import fr.thermohabitat.pro.ui.components.rememberGalleryPicker
 import fr.thermohabitat.pro.ui.navigation.CaptureRoute
 import fr.thermohabitat.pro.ui.navigation.RadiatorEditRoute
 import fr.thermohabitat.thermal.model.PhotoKind
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
@@ -115,15 +128,22 @@ class CaptureViewModel @Inject constructor(
         runCatching {
             photoStorage.normalizeInPlace(file)
             repository.addPhoto(route.buildingId, owner, route.ownerId, file, kind)
-        }.onFailure { message.value = "Enregistrement impossible : ${it.message}" }
+        }.onSuccess { message.value = "Photo « ${kind.label} » enregistrée" }
+            .onFailure { message.value = "Enregistrement impossible : ${it.message}" }
         busy.value = false
     }
 
     fun import(uris: List<android.net.Uri>, kind: PhotoKind) = viewModelScope.launch {
         busy.value = true
+        var imported = 0
         uris.forEach { uri ->
             runCatching { repository.importPhoto(route.buildingId, owner, route.ownerId, uri, kind) }
+                .onSuccess { imported++ }
                 .onFailure { message.value = "Import impossible : ${it.message}" }
+        }
+        // Confirmation seulement si tout a réussi : un message d'échec reste prioritaire.
+        if (imported > 0 && imported == uris.size) {
+            message.value = if (imported == 1) "Photo « ${kind.label} » importée" else "$imported photos « ${kind.label} » importées"
         }
         busy.value = false
     }
@@ -147,9 +167,14 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
     }
     var cameraError by remember { mutableStateOf<String?>(null) }
     var guide by remember { mutableStateOf(false) }
+    // Vrai entre l'appui sur le déclencheur et l'enregistrement du fichier par CameraX.
+    var shooting by remember { mutableStateOf(false) }
+    val working = busy || shooting
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasPermission = it }
     val gallery = rememberGalleryPicker { vm.import(it, kind) }
     LaunchedEffect(Unit) { if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA) }
+    // Message éphémère (confirmation ou erreur) : il ne reste pas affiché après les prises suivantes.
+    LaunchedEffect(message) { if (message != null) { delay(4000); vm.message.value = null } }
 
     val imageCapture = remember {
         ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
@@ -180,7 +205,7 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
     }
 
     ScreenScaffold(
-        title = if (isRadiator) "Photographier le radiateur" else "Photographier la pièce",
+        title = "Prise de vue",
         onBack = { nav.popBackStack() },
         actions = { if (isRadiator) IconButton(onClick = { guide = true }) { Icon(Icons.Filled.Info, "Guide de prise de vue") } },
     ) { padding ->
@@ -197,21 +222,37 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                         if (!hasPermission) Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) { Text("Autoriser l'appareil photo") }
                     }
                 }
+                // Retour visible après une prise de vue ou un import, sur l'aperçu (ne masque pas les boutons).
+                message?.let {
+                    Surface(Modifier.align(Alignment.BottomCenter).padding(8.dp), color = MaterialTheme.colorScheme.inverseSurface,
+                        shape = RoundedCornerShape(8.dp)) {
+                        Text(it, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.inverseOnSurface,
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChips(kinds, kind, { it.label }, { kind = it })
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { gallery.launch(galleryRequest()) }) { Icon(Icons.Filled.PhotoLibrary, null); Text(" Galerie") }
-                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                // Nombre de vues déjà prises par type : évite d'étiqueter une nouvelle vue « Face » par erreur.
+                ChoiceChips(kinds, kind, { k -> photos.count { it.kind == k }.let { n -> if (n > 0) "${k.label} ($n)" else k.label } }, { kind = it })
+                // Deux côtés de même largeur : le déclencheur reste centré et « Terminer » n'est jamais écrasé.
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        CaptureSideAction(Icons.Filled.PhotoLibrary, "Galerie") { gallery.launch(galleryRequest()) }
+                    }
                     FilledIconButton(
                         onClick = {
                             val file = vm.newFile()
+                            shooting = true
                             imageCapture.takePicture(
                                 ImageCapture.OutputFileOptions.Builder(file).build(),
                                 ContextCompat.getMainExecutor(context),
                                 object : ImageCapture.OnImageSavedCallback {
-                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) { vm.onCaptured(file, kind) }
+                                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                        shooting = false
+                                        vm.onCaptured(file, kind)
+                                    }
                                     override fun onError(exception: ImageCaptureException) {
+                                        shooting = false
                                         file.delete()
                                         cameraError = null
                                         vm.message.value = "Prise de vue impossible : ${exception.message}"
@@ -219,27 +260,44 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                                 },
                             )
                         },
-                        enabled = hasPermission && cameraError == null && !busy,
+                        enabled = hasPermission && cameraError == null && !working,
                         modifier = Modifier.size(72.dp),
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(),
-                    ) { Icon(Icons.Filled.CameraAlt, "Prendre la photo", Modifier.size(36.dp)) }
-                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
-                    Button(onClick = { finish() }) { Icon(Icons.Filled.Check, null); Text(" Terminer") }
+                    ) {
+                        if (working) CircularProgressIndicator(Modifier.size(32.dp), color = LocalContentColor.current, strokeWidth = 3.dp)
+                        else Icon(Icons.Filled.CameraAlt, "Prendre la photo", Modifier.size(36.dp))
+                    }
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        CaptureSideAction(Icons.Filled.Check, "Terminer", primary = true) { finish() }
+                    }
                 }
                 if (photos.isNotEmpty()) {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         photos.forEach { p -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            PhotoThumbnail(p.fileName, Modifier.size(64.dp)); Text(p.kind.label, style = MaterialTheme.typography.labelSmall)
+                            PhotoThumbnail(p.fileName, Modifier.size(64.dp))
+                            Text(p.kind.label, Modifier.width(64.dp), style = MaterialTheme.typography.labelSmall, maxLines = 2,
+                                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                         } }
                     }
                 }
-                message?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         }
     }
 
     if (showGuide || guide) CaptureGuideDialog(onDismiss = { guide = false; vm.closeGuide() })
+}
+
+/** Action latérale de la prise de vue : grande icône et libellé court dessous (largeur fixe, jamais écrasée). */
+@Composable
+private fun CaptureSideAction(icon: ImageVector, label: String, primary: Boolean = false, onClick: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (primary) FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) { Icon(icon, contentDescription = label) }
+        else OutlinedIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) { Icon(icon, contentDescription = label) }
+        // Libellé déjà annoncé par l'icône : non relu par TalkBack.
+        Text(label, Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+    }
 }
 
 /** Cadre de visée et consigne adaptés au type de vue. */
@@ -251,15 +309,24 @@ private fun CaptureGuideOverlay(kind: PhotoKind) {
         PhotoKind.NAMEPLATE -> "Plaque ou marquage en gros plan, sans reflet"
         else -> "Détail utile (robinet, raccord, marquage)"
     }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Box(Modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize()) {
-            val w = size.width * if (kind == PhotoKind.NAMEPLATE) 0.6f else 0.86f
-            val h = size.height * if (kind == PhotoKind.NAMEPLATE) 0.3f else 0.6f
-            drawRect(Color.White, Offset((size.width - w) / 2, (size.height - h) / 2), Size(w, h),
-                style = Stroke(width = 4f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 16f))))
+            // Cadre calculé sur la zone réellement occupée par l'aperçu FIT_CENTER (flux CameraX 4:3, 3:4 en portrait),
+            // et non sur toute la boîte : il ne déborde plus sur les bandes noires.
+            val imgRatio = if (landscape) 4f / 3f else 3f / 4f
+            val iw = minOf(size.width, size.height * imgRatio); val ih = iw / imgRatio
+            val ox = (size.width - iw) / 2; val oy = (size.height - ih) / 2
+            val w = iw * if (kind == PhotoKind.NAMEPLATE) 0.6f else 0.86f
+            val h = ih * if (kind == PhotoKind.NAMEPLATE) 0.3f else 0.6f
+            drawRect(Color.White, Offset(ox + (iw - w) / 2, oy + (ih - h) / 2), Size(w, h),
+                style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()))))
         }
-        Text(tip, color = Color.White, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.align(Alignment.TopCenter).padding(12.dp).background(Color.Black.copy(alpha = 0.5f)).padding(8.dp))
+        // Consigne compacte (2 lignes au plus) : elle ne recouvre plus l'aperçu avec une grande police.
+        Text(tip, color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+            maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.6f))
+                .padding(horizontal = 12.dp, vertical = 6.dp))
     }
 }
 
