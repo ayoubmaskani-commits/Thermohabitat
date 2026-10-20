@@ -130,7 +130,12 @@ class ScenariosViewModel @Inject constructor(
     private val repository: ProjectRepository,
     private val analyzer: StudyAnalyzer,
 ) : ViewModel() {
-    val project = studyService.observeActive().stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    /** Étude active une fois chargée ; [project] est null s'il n'y a aucune étude. */
+    class Active(val project: AnalyzedProject?)
+
+    /** null pendant le chargement : distingue « en cours » de « aucune étude ». */
+    val active = studyService.observeActive().map { Active(it) }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val project = active.map { it?.project }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val rows = project.flatMapLatest { p ->
         if (p == null) flowOf(emptyList())
@@ -149,7 +154,8 @@ class ScenariosViewModel @Inject constructor(
 
 @Composable
 fun ScenariosScreen(nav: NavController, vm: ScenariosViewModel = hiltViewModel()) {
-    val p by vm.project.collectAsStateWithLifecycle()
+    val active by vm.active.collectAsStateWithLifecycle()
+    val p = active?.project
     val rows by vm.rows.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var showTemplates by remember { mutableStateOf(false) }
@@ -165,15 +171,17 @@ fun ScenariosScreen(nav: NavController, vm: ScenariosViewModel = hiltViewModel()
         ScrollColumn(padding) {
             val a: AnalyzedProject? = p
             if (a == null) {
-                EmptyState("Aucune étude ouverte", "Ouvrez ou créez une étude depuis l'accueil pour comparer des scénarios de travaux.",
+                // Pendant le chargement, rien : pas de faux « Aucune étude ouverte ».
+                if (active != null) EmptyState("Aucune étude ouverte", "Ouvrez ou créez une étude depuis l'accueil pour comparer des scénarios de travaux.",
                     actionLabel = "Aller à l'accueil", onAction = { nav.navigateToTab(HomeRoute) })
                 return@ScrollColumn
             }
             if (a.project.building.rooms.isEmpty()) {
-                // Sans pièce, toutes les valeurs seraient nulles (« 0,00 kW → 0,00 kW ») : on guide vers la saisie.
+                // Sans pièce, toutes les valeurs seraient nulles (« 0,00 kW → 0,00 kW ») : on guide vers la saisie,
+                // sans masquer les scénarios déjà créés (ouverture et suppression restent possibles).
                 EmptyState("Aucune pièce saisie", "Un scénario compare la maison avant et après travaux : saisissez d'abord les pièces et leurs parois.",
                     actionLabel = "Saisir la maison", onAction = { nav.navigateToTab(HouseRoute) })
-                return@ScrollColumn
+                if (rows.isEmpty()) return@ScrollColumn
             }
             InfoBanner("Chaque scénario est appliqué à une copie de l'étude : déperditions, besoins, couverture des radiateurs, température de départ et consommations sont recalculés.")
             if (rows.isEmpty()) EmptyState("Aucun scénario", "Partez d'un modèle : isolation, fenêtres, combles, radiateurs, basse température…",

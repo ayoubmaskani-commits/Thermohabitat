@@ -370,7 +370,7 @@ fun CoolingScreen(nav: NavController, vm: CoolingViewModel = hiltViewModel()) {
                     val z = if (o.multizone && rid != null) c.calibrated.zone(rid) else c.calibrated.zones.firstOrNull()
                     z?.let { series += LineSeries("Modèle calé", c.calibrated.timesH, it.airTempC, MaterialTheme.colorScheme.tertiary) }
                 }
-                d.scenario?.let { Text("Pointillés : scénario « ${it.name} »", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                d.scenario?.let { Text("Pointillés de couleur : scénario « ${it.name} » · pointillés gris : extérieur", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 LineChart(series, xLabel = axisLabel, height = 280.dp)
                 val limited = shown.size > plotted.size
                 val bandHidden = crowded && o.band

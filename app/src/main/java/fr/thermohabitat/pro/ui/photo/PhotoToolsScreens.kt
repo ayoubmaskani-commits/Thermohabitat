@@ -165,7 +165,7 @@ fun PhotoEditScreen(nav: NavController, vm: PhotoEditViewModel = hiltViewModel()
             val accent = MaterialTheme.colorScheme.secondary
             ImageWorkArea(
                 b,
-                onDragStart = { crop.start(it, maxOf(b.width, b.height) * 0.07f) },
+                onDragStart = { p, minTolerance -> crop.start(p, maxOf(maxOf(b.width, b.height) * 0.07f, minTolerance)) },
                 onDrag = { _, delta -> crop.drag(delta) },
             ) { frame -> drawCrop(frame, crop.rect, accent) }
             Text("Faites glisser les coins pour recadrer sur le radiateur, ou le cadre pour le déplacer.", style = MaterialTheme.typography.bodySmall)
@@ -256,7 +256,7 @@ fun ElementCountScreen(nav: NavController, vm: ElementCountViewModel = hiltViewM
             val lines = Color(0xFFFFC107)
             ImageWorkArea(
                 b,
-                onDragStart = { crop.start(it, maxOf(b.width, b.height) * 0.07f) },
+                onDragStart = { p, minTolerance -> crop.start(p, maxOf(maxOf(b.width, b.height) * 0.07f, minTolerance)) },
                 onDrag = { _, d -> crop.drag(d) },
             ) { frame ->
                 drawCrop(frame, crop.rect, accent)

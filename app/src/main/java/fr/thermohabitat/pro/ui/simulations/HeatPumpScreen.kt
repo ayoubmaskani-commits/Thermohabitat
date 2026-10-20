@@ -134,21 +134,23 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
             val d = data ?: return@ScrollColumn
             val s = d.settings
             val hl = d.analyzed.result.heatLoss
-            if (hl.totalW <= 0.0) {
-                // Sans besoin calculé, charge, SCOP et bivalence seraient des zéros trompeurs.
-                EmptyState("Aucun besoin calculé", "Saisissez les pièces de la maison (dimensions, parois) pour dimensionner la pompe à chaleur.",
+            val hasNeed = hl.totalW > 0.0
+            if (!hasNeed) {
+                // Sans besoin calculé, charge, SCOP et bivalence seraient des zéros trompeurs : on masque ces résultats,
+                // pas les saisies (loi d'eau, fiche de la PAC), modifiables seulement sur cet écran.
+                EmptyState("Aucun besoin calculé", "Saisissez les pièces de la maison (dimensions, parois) pour dimensionner la pompe à chaleur. " +
+                    "Vous pouvez déjà renseigner la loi d'eau et la fiche de la PAC.",
                     actionLabel = "Saisir les pièces", onAction = { nav.navigateToTab(HouseRoute) })
-                return@ScrollColumn
             }
             val curve = s.heatingCurve
             val supply = d.analyzed.result.supply
             val bv = d.bivalence
             // Température extérieure de base écrite en clair plutôt que « θe ».
-            val base = Fmt.temp(hl.designOutdoorC, 0)
+            val base = Fmt.temp(hl.designOutdoorC)
             val scopText = if (d.seasonal.scop > 0) Fmt.num(d.seasonal.scop, 2) else "–"
 
             // L'essentiel d'abord ; le détail et les saisies suivent.
-            SectionCard("En résumé", icon = Icons.Filled.LocalFireDepartment) {
+            if (hasNeed) SectionCard("En résumé", icon = Icons.Filled.LocalFireDepartment) {
                 ValueRow("Puissance nécessaire par grand froid ($base)", Fmt.kw(hl.totalW), emphasize = true)
                 ValueRow("SCOP estimé", scopText, emphasize = true)
                 ValueRow("Point de bivalence", when {
@@ -159,7 +161,7 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                 ValueRow("Départ d'eau nécessaire à $base", Fmt.supply(supply))
             }
 
-            SectionCard("Besoins et émetteurs", subtitle = "Couverture par les radiateurs validés selon le régime d'eau") {
+            if (hasNeed) SectionCard("Besoins et émetteurs", subtitle = "Couverture par les radiateurs validés selon le régime d'eau") {
                 ValueRow("Déperdition par degré d'écart (H)", "${Fmt.num(hl.totalHWk, 0)} W/K")
                 d.analyzed.result.regimeCoverages.filter { it.supplyC in listOf(45.0, 50.0, 55.0, 60.0) }.forEach { c ->
                     ValueRow("Couverture à ${c.supplyC.toInt()}/${c.returnC?.toInt() ?: "–"} °C", "${Fmt.coverage(c)} · ${c.insufficientRooms.size} pièce(s) insuffisante(s)")
@@ -169,18 +171,18 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
             SectionCard("Loi d'eau", icon = Icons.AutoMirrored.Filled.ShowChart, subtitle = "Température de départ selon la température extérieure") {
                 Text("Point de base (grand froid)", style = MaterialTheme.typography.labelLarge)
                 FieldRow {
-                    NumberField("Temp. extérieure", curve.designOutdoorC, { v -> v?.let { vm.updateCurve { c -> c.copy(designOutdoorC = it) } } }, unit = "°C", decimals = 1, nullable = false)
-                    NumberField("Départ d'eau", curve.designSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(designSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 20.0, max = 90.0)
+                    NumberField("Temp. ext. de base", curve.designOutdoorC, { v -> v?.let { vm.updateCurve { c -> c.copy(designOutdoorC = it) } } }, unit = "°C", decimals = 1, nullable = false)
+                    NumberField("Départ à la base", curve.designSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(designSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 20.0, max = 90.0)
                 }
                 Text("Pied de courbe (redoux)", style = MaterialTheme.typography.labelLarge)
                 FieldRow {
-                    NumberField("Temp. extérieure", curve.footOutdoorC, { v -> v?.let { vm.updateCurve { c -> c.copy(footOutdoorC = it) } } }, unit = "°C", decimals = 1, nullable = false)
-                    NumberField("Départ d'eau", curve.footSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(footSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 60.0)
+                    NumberField("Temp. ext. de redoux", curve.footOutdoorC, { v -> v?.let { vm.updateCurve { c -> c.copy(footOutdoorC = it) } } }, unit = "°C", decimals = 1, nullable = false)
+                    NumberField("Départ au redoux", curve.footSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(footSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 60.0)
                 }
                 Text("Limites du départ d'eau", style = MaterialTheme.typography.labelLarge)
                 FieldRow {
-                    NumberField("Minimum", curve.minSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(minSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
-                    NumberField("Maximum", curve.maxSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(maxSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
+                    NumberField("Départ minimum", curve.minSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(minSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
+                    NumberField("Départ maximum", curve.maxSupplyC, { v -> v?.let { vm.updateCurve { c -> c.copy(maxSupplyC = it) } } }, unit = "°C", decimals = 0, nullable = false, min = 15.0, max = 90.0)
                 }
                 if (curve.minSupplyC > curve.maxSupplyC) {
                     InfoBanner("Le départ minimal dépasse le départ maximal : la loi d'eau est bornée entre ces deux valeurs dans l'ordre croissant.", kind = BannerKind.WARNING)
@@ -217,8 +219,10 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                     TextInput("Fabricant", s.heatPump.manufacturer, { v -> vm.updatePump { it.copy(manufacturer = v) } })
                     TextInput("Référence", s.heatPump.reference, { v -> vm.updatePump { it.copy(reference = v) } })
                 }
-                InfoBanner("Le besoin du bâtiment (${Fmt.kw(hl.totalW)} à $base) n'est pas la puissance commerciale de la PAC : " +
-                    "celle-ci est souvent annoncée à +7 °C extérieur et 35 °C d'eau, et diminue par grand froid.", kind = BannerKind.WARNING)
+                if (hasNeed) {
+                    InfoBanner("Le besoin du bâtiment (${Fmt.kw(hl.totalW)} à $base) n'est pas la puissance commerciale de la PAC : " +
+                        "celle-ci est souvent annoncée à +7 °C extérieur et 35 °C d'eau, et diminue par grand froid.", kind = BannerKind.WARNING)
+                }
                 NumberField("Puissance nominale", s.heatPump.nominalCapacityKw, { v -> vm.updatePump { it.copy(nominalCapacityKw = v) } },
                     unit = "kW", decimals = 1, min = 0.5, max = 100.0,
                     supportingText = "Information commerciale, à air ${Fmt.temp(s.heatPump.nominalOutdoorC, 0)} et eau ${Fmt.temp(s.heatPump.nominalWaterC, 0)}")
@@ -240,7 +244,7 @@ fun HeatPumpScreen(nav: NavController, vm: HeatPumpViewModel = hiltViewModel()) 
                     supportingText = "Part du COP théorique (Carnot) retenue sans données constructeur")
             }
 
-            SectionCard("Bivalence et performance saisonnière") {
+            if (hasNeed) SectionCard("Bivalence et performance saisonnière") {
                 ValueRow("Puissance de la PAC à $base", bv.capacityAtDesignKw?.let { "${Fmt.num(it, 1)} kW" } ?: "Inconnue (données manquantes)")
                 ValueRow("Point de bivalence", when {
                     bv.capacityAtDesignKw == null -> "Indéterminé"

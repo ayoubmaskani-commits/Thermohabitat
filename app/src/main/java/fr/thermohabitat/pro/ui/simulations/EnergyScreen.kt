@@ -1,5 +1,9 @@
 package fr.thermohabitat.pro.ui.simulations
 
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
@@ -99,32 +103,30 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
             val hasCosts = (est.calibratedNeedKwh ?: est.annualNeedKwh) > 0.0
 
             if (noModel) {
+                // Texte fixe : sa hauteur ne change pas pendant la saisie de la consommation, plus bas.
                 InfoBanner(
-                    if (hasCosts) "Aucun besoin calculé (pièces non saisies) : les coûts ci-dessous reposent uniquement sur la consommation constatée."
-                    else "Aucun besoin calculé : saisissez les pièces de la maison pour estimer besoins et coûts. " +
-                        "Vous pouvez déjà renseigner l'énergie actuelle et vos tarifs.",
+                    "Aucun besoin calculé (pièces non saisies) : saisissez les pièces pour estimer besoins et coûts. " +
+                        "Les coûts peuvent déjà reposer sur la consommation constatée, si vous la renseignez.",
                     kind = BannerKind.WARNING,
                 )
                 Button(onClick = { nav.navigateToTab(HouseRoute) }) { Text("Saisir les pièces") }
             }
 
-            // L'essentiel (dépense annuelle) en tête ; les saisies suivent.
-            if (hasCosts) {
-                val current = est.carriers.firstOrNull { it.carrier == e.currentCarrier }
-                val best = est.carriers.minByOrNull { it.costEur }
-                SectionCard("En résumé", icon = Icons.Filled.Euro, subtitle = "Selon les prix et rendements saisis plus bas") {
-                    ValueRow(if (est.calibratedNeedKwh != null) "Besoins annuels (calés sur la consommation)" else "Besoins annuels estimés",
-                        "${Fmt.num(est.calibratedNeedKwh ?: est.annualNeedKwh, 0)} kWh")
-                    current?.let { ValueRow("Dépense actuelle estimée", "${Fmt.eur(it.costEur)}/an", emphasize = true) }
-                    best?.let { b ->
-                        if (b.carrier == e.currentCarrier || b.savingsVsCurrentEur < 0.5) {
-                            ValueRow("Énergie la moins chère", "Énergie actuelle")
-                        } else {
-                            ValueRow("Énergie la moins chère", "${b.carrier.label} · ${Fmt.eur(b.costEur)}/an")
-                            ValueRow("Économie possible", "${Fmt.eur(b.savingsVsCurrentEur)}/an")
-                        }
-                    }
-                }
+            // L'essentiel (dépense annuelle) en tête, toujours avec les mêmes lignes (« – » sans données) :
+            // la saisie de la consommation ou d'un rendement, plus bas, ne fait pas sauter la page.
+            val current = est.carriers.firstOrNull { it.carrier == e.currentCarrier }?.takeIf { hasCosts }
+            val best = est.carriers.minByOrNull { it.costEur }?.takeIf { hasCosts }
+            val bestIsCurrent = best == null || best.carrier == e.currentCarrier || best.savingsVsCurrentEur < 0.5
+            SectionCard("En résumé", icon = Icons.Filled.Euro, subtitle = "Selon les prix et rendements saisis plus bas") {
+                ValueRow("Besoins annuels", if (!hasCosts) "–"
+                    else "${Fmt.num(est.calibratedNeedKwh ?: est.annualNeedKwh, 0)} kWh" + if (est.calibratedNeedKwh != null) " (calés sur la consommation)" else "")
+                ValueRow("Dépense actuelle estimée", current?.let { "${Fmt.eur(it.costEur)}/an" } ?: "–", emphasize = true)
+                ValueRow("Énergie la moins chère", when {
+                    best == null -> "–"
+                    bestIsCurrent -> "Énergie actuelle"
+                    else -> "${best.carrier.label} · ${Fmt.eur(best.costEur)}/an"
+                })
+                ValueRow("Économie possible", if (best == null || bestIsCurrent) "–" else "${Fmt.eur(best.savingsVsCurrentEur)}/an")
             }
 
             SectionCard("Situation actuelle", icon = Icons.Filled.Calculate) {
@@ -203,15 +205,19 @@ fun EnergyScreen(nav: NavController, vm: EnergyViewModel = hiltViewModel()) {
             SectionCard("Prix et rendements", subtitle = "Prix : exemples à remplacer par vos tarifs actuels") {
                 EnergyCarrier.entries.forEachIndexed { index, c ->
                     if (index > 0) HorizontalDivider()
-                    Text(c.label, style = MaterialTheme.typography.titleSmall)
+                    // Libellés courts à l'écran ; le nom de l'énergie est un titre et accompagne chaque champ pour TalkBack.
+                    Text(c.label, Modifier.semantics { heading() }, style = MaterialTheme.typography.titleSmall)
                     FieldRow {
                         NumberField("Prix", e.priceOf(c), { v -> v?.let { vm.edit { x -> x.copy(prices = x.prices + (c to it)) } } },
+                            Modifier.semantics { contentDescription = "Prix, ${c.label}" },
                             unit = "€/${c.unit}", decimals = 3, nullable = false, min = 0.0)
                         if (c == EnergyCarrier.HEAT_PUMP) {
                             NumberField("SCOP imposé", e.heatPumpScopOverride, { v -> vm.edit { x -> x.copy(heatPumpScopOverride = v) } },
+                                Modifier.semantics { contentDescription = "SCOP imposé, ${c.label}" },
                                 decimals = 2, min = 1.0, max = 7.0, supportingText = "Facultatif. Vide : SCOP calculé (${Fmt.num(d.analyzed.result.seasonal?.scop, 2)})")
                         } else {
                             NumberField("Rendement", e.efficiencyOf(c) * 100, { v -> v?.let { vm.edit { x -> x.copy(efficiencies = x.efficiencies + (c to it / 100)) } } },
+                                Modifier.semantics { contentDescription = "Rendement, ${c.label}" },
                                 unit = "%", decimals = 0, nullable = false, min = 10.0, max = 120.0)
                         }
                     }

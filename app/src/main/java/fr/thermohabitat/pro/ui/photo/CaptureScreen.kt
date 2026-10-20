@@ -1,5 +1,13 @@
 package fr.thermohabitat.pro.ui.photo
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -36,13 +44,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,7 +69,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +106,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
+/** Retour après une prise de vue ou un import ; une erreur n'est pas effacée automatiquement. */
+data class CaptureMessage(val text: String, val isError: Boolean = false)
+
 @HiltViewModel
 class CaptureViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -112,7 +120,7 @@ class CaptureViewModel @Inject constructor(
     val owner = PhotoOwner.valueOf(route.ownerType)
     val photos = repository.observePhotos(owner, route.ownerId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val busy = MutableStateFlow(false)
-    val message = MutableStateFlow<String?>(null)
+    val message = MutableStateFlow<CaptureMessage?>(null)
     val showGuide = MutableStateFlow(false)
 
     init {
@@ -128,8 +136,8 @@ class CaptureViewModel @Inject constructor(
         runCatching {
             photoStorage.normalizeInPlace(file)
             repository.addPhoto(route.buildingId, owner, route.ownerId, file, kind)
-        }.onSuccess { message.value = "Photo « ${kind.label} » enregistrée" }
-            .onFailure { message.value = "Enregistrement impossible : ${it.message}" }
+        }.onSuccess { message.value = CaptureMessage("Photo « ${kind.label} » enregistrée") }
+            .onFailure { message.value = CaptureMessage("Enregistrement impossible : ${it.message}", isError = true) }
         busy.value = false
     }
 
@@ -139,11 +147,11 @@ class CaptureViewModel @Inject constructor(
         uris.forEach { uri ->
             runCatching { repository.importPhoto(route.buildingId, owner, route.ownerId, uri, kind) }
                 .onSuccess { imported++ }
-                .onFailure { message.value = "Import impossible : ${it.message}" }
+                .onFailure { message.value = CaptureMessage("Import impossible : ${it.message}", isError = true) }
         }
         // Confirmation seulement si tout a réussi : un message d'échec reste prioritaire.
         if (imported > 0 && imported == uris.size) {
-            message.value = if (imported == 1) "Photo « ${kind.label} » importée" else "$imported photos « ${kind.label} » importées"
+            message.value = CaptureMessage(if (imported == 1) "Photo « ${kind.label} » importée" else "$imported photos « ${kind.label} » importées")
         }
         busy.value = false
     }
@@ -174,7 +182,8 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
     val gallery = rememberGalleryPicker { vm.import(it, kind) }
     LaunchedEffect(Unit) { if (!hasPermission) permissionLauncher.launch(Manifest.permission.CAMERA) }
     // Message éphémère (confirmation ou erreur) : il ne reste pas affiché après les prises suivantes.
-    LaunchedEffect(message) { if (message != null) { delay(4000); vm.message.value = null } }
+    // Les confirmations s'effacent seules ; une erreur reste affichée jusqu'à l'action suivante ou un appui dessus.
+    LaunchedEffect(message) { if (message?.isError == false) { delay(4000); vm.message.value = null } }
 
     val imageCapture = remember {
         ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
@@ -223,10 +232,16 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                     }
                 }
                 // Retour visible après une prise de vue ou un import, sur l'aperçu (ne masque pas les boutons).
-                message?.let {
-                    Surface(Modifier.align(Alignment.BottomCenter).padding(8.dp), color = MaterialTheme.colorScheme.inverseSurface,
-                        shape = RoundedCornerShape(8.dp)) {
-                        Text(it, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.inverseOnSurface,
+                message?.let { m ->
+                    Surface(
+                        Modifier.align(Alignment.BottomCenter).padding(8.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                            .then(if (m.isError) Modifier.clickable { vm.message.value = null } else Modifier),
+                        color = if (m.isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.inverseSurface,
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text(m.text, Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = if (m.isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.inverseOnSurface,
                             style = MaterialTheme.typography.bodyMedium)
                     }
                 }
@@ -237,10 +252,11 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                 // Deux côtés de même largeur : le déclencheur reste centré et « Terminer » n'est jamais écrasé.
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                        CaptureSideAction(Icons.Filled.PhotoLibrary, "Galerie") { gallery.launch(galleryRequest()) }
+                        CaptureSideAction(Icons.Filled.PhotoLibrary, "Galerie") { vm.message.value = null; gallery.launch(galleryRequest()) }
                     }
                     FilledIconButton(
                         onClick = {
+                            vm.message.value = null
                             val file = vm.newFile()
                             shooting = true
                             imageCapture.takePicture(
@@ -255,7 +271,7 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                                         shooting = false
                                         file.delete()
                                         cameraError = null
-                                        vm.message.value = "Prise de vue impossible : ${exception.message}"
+                                        vm.message.value = CaptureMessage("Prise de vue impossible : ${exception.message}", isError = true)
                                     }
                                 },
                             )
@@ -265,7 +281,8 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(),
                     ) {
-                        if (working) CircularProgressIndicator(Modifier.size(32.dp), color = LocalContentColor.current, strokeWidth = 3.dp)
+                        if (working) CircularProgressIndicator(Modifier.size(32.dp).semantics { contentDescription = "Enregistrement en cours" },
+                            color = LocalContentColor.current, strokeWidth = 3.dp)
                         else Icon(Icons.Filled.CameraAlt, "Prendre la photo", Modifier.size(36.dp))
                     }
                     Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
@@ -291,12 +308,18 @@ fun CaptureScreen(nav: NavController, vm: CaptureViewModel = hiltViewModel()) {
 /** Action latérale de la prise de vue : grande icône et libellé court dessous (largeur fixe, jamais écrasée). */
 @Composable
 private fun CaptureSideAction(icon: ImageVector, label: String, primary: Boolean = false, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (primary) FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) { Icon(icon, contentDescription = label) }
-        else OutlinedIconButton(onClick = onClick, modifier = Modifier.size(56.dp)) { Icon(icon, contentDescription = label) }
-        // Libellé déjà annoncé par l'icône : non relu par TalkBack.
-        Text(label, Modifier.clearAndSetSemantics { }, style = MaterialTheme.typography.labelMedium, maxLines = 1,
-            overflow = TextOverflow.Ellipsis)
+    // Icône et libellé forment une seule cible tactile (TalkBack lit « <libellé>, bouton »).
+    Column(
+        Modifier.clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onClick).padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Surface(
+            Modifier.size(56.dp), shape = CircleShape,
+            color = if (primary) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+            contentColor = if (primary) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            border = if (primary) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        ) { Box(contentAlignment = Alignment.Center) { Icon(icon, contentDescription = null) } }
+        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

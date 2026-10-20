@@ -59,7 +59,8 @@ fun ImageWorkArea(
     modifier: Modifier = Modifier,
     height: Dp = 380.dp,
     onTap: ((Offset) -> Unit)? = null,
-    onDragStart: ((Offset) -> Unit)? = null,
+    /** Début de glissé : position en pixels image, et l'équivalent de 24 dp à l'écran en pixels image (tolérance minimale de saisie). */
+    onDragStart: ((Offset, Float) -> Unit)? = null,
     onDrag: ((Offset, Offset) -> Unit)? = null,
     overlay: DrawScope.(ImageFrame) -> Unit = {},
 ) {
@@ -81,7 +82,7 @@ fun ImageWorkArea(
                         if (onDrag != null) {
                             val f = { ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height) }
                             detectDragGestures(
-                                onDragStart = { pos -> onDragStart?.invoke(f().toImage(pos)) },
+                                onDragStart = { pos -> val fr = f(); onDragStart?.invoke(fr.toImage(pos), 24.dp.toPx() / fr.scale) },
                             ) { change, amount ->
                                 change.consume()
                                 val fr = f()
