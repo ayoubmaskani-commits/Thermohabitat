@@ -81,15 +81,18 @@ jobs:
           echo "===== TESTS EN ÉCHEC ====="
           grep -E "FAILED$|Exception|expected:" build.log | head -60 || true
 
-      # Captures d'écran de l'application réelle (Robolectric, 360 dp, police 130 %) pour vérifier la mise en page.
+      # Captures d'écran de l'application réelle (Robolectric, 360 dp, police 130 % et 150 %) pour vérifier la mise en page.
       # Étape informative : elle n'empêche pas la publication des APK.
       - name: Captures d'écran
         if: always()
         continue-on-error: true
         run: |
-          ./gradlew --no-daemon :app:testDebugUnitTest --tests 'fr.thermohabitat.pro.ui.ScreenCaptureTest' -Pcaptures=true 2>&1 | tail -25
+          # Police système à 130 % puis à 150 % (cas le plus contraignant).
+          for scale in 1.3 1.5; do
+            ./gradlew --no-daemon :app:testDebugUnitTest --tests 'fr.thermohabitat.pro.ui.ScreenCaptureTest' -Pcaptures=true -PcapturesFontScale=$scale 2>&1 | tail -8
+          done
           echo "===== ÉTAPES EN ÉCHEC ====="
-          cat app/build/captures/errors.txt 2>/dev/null || echo "(aucun fichier)"
+          cat app/build/captures/errors*.txt 2>/dev/null || echo "(aucun fichier)"
           for f in app/build/captures/*.png; do
             [ -f "$f" ] || continue
             echo "=====CAPTURE $(basename "$f")"

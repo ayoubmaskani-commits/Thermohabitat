@@ -182,8 +182,9 @@ fun RadiatorsScreen(nav: NavController, vm: RadiatorsViewModel = hiltViewModel()
                 var menu by remember { mutableStateOf(false) }
                 Card(Modifier.fillMaxWidth().clickable { nav.navigate(RadiatorEditRoute(r.id)) }, shape = RoundedCornerShape(14.dp)) {
                     Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (photo != null) PhotoThumbnail(photo.fileName, Modifier.size(84.dp))
-                        else Box(Modifier.size(84.dp), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Thermostat, null) }
+                        // Vignette compacte : laisse la largeur au nom, à la puissance et au statut sur petit écran.
+                        if (photo != null) PhotoThumbnail(photo.fileName, Modifier.size(64.dp))
+                        else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Thermostat, null) }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("${r.code} · ${r.label.ifBlank { r.type.label }}", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)

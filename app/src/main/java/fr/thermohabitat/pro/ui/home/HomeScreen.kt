@@ -16,7 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.House
@@ -316,7 +316,7 @@ private fun ActiveProjectDashboard(p: AnalyzedProject, onOpenHouse: () -> Unit, 
         KpiGrid(
             listOf(
                 // Espace insécable : « 55 °C » ne se coupe pas dans le titre (deux lignes au plus).
-                Kpi("Couverture à ${coverage.supplyC.toInt()}\u00A0°C", if (noRadiator) "–" else Fmt.coverage(coverage), Icons.Filled.CheckCircle,
+                Kpi("Couverture à ${coverage.supplyC.toInt()}\u00A0°C", if (noRadiator) "–" else Fmt.coverage(coverage), Icons.Filled.PieChart,
                     detail = if (noRadiator) "Aucun radiateur validé" else "Part des besoins couverts",
                     accent = if (noRadiator) null else coverageColor),
                 Kpi("Radiateurs validés", "${r.validatedRadiatorCount} / ${r.radiatorCount}", Icons.Filled.ViewColumn),

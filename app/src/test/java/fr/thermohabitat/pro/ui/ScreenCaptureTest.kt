@@ -60,9 +60,15 @@ class ScreenCaptureTest {
     @get:Rule(order = 0)
     val hilt = HiltAndroidRule(this)
 
+    /** Taille de police système (1,3 par défaut ; 1,5 pour le cas le plus contraignant). */
+    private val fontScale = System.getProperty("capturesFontScale")?.toFloatOrNull() ?: 1.3f
+
+    /** Préfixe des fichiers pour une police autre que 130 % (ex. « x150_ »). */
+    private val prefix = if (fontScale == 1.3f) "" else "x${(fontScale * 100).toInt()}_"
+
     @get:Rule(order = 1)
     val largeFont = object : ExternalResource() {
-        override fun before() = RuntimeEnvironment.setFontScale(1.3f)
+        override fun before() = RuntimeEnvironment.setFontScale(fontScale)
     }
 
     // Règle v2 : coroutines de composition mises en file (StandardTestDispatcher) et exécutées sur le fil principal.
@@ -101,7 +107,7 @@ class ScreenCaptureTest {
         step("21_energie_bas") { scrollToEnd() }
         step("22_rapports") { back(); tab("Rapports") }
         step("23_reglages") { compose.onNodeWithContentDescription("Réglages").performClick(); settle() }
-        File(dir, "errors.txt").writeText(errors.joinToString("\n", postfix = "\n"))
+        File(dir, "errors$prefix.txt").writeText(errors.joinToString("\n", postfix = "\n") { prefix + it })
     }
 
     /** Exécute une étape de navigation puis capture l'écran ; une étape en échec est notée sans arrêter le parcours. */
@@ -155,6 +161,6 @@ class ScreenCaptureTest {
             val view = compose.activity.window.decorView
             bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { b -> view.draw(Canvas(b)) }
         }
-        FileOutputStream(File(dir, "$name.png")).use { bitmap!!.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        FileOutputStream(File(dir, "$prefix$name.png")).use { bitmap!!.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 }

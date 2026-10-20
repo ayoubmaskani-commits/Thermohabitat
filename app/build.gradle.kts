@@ -50,8 +50,11 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
-            // Parcours de captures d'écran (ScreenCaptureTest) activé par -Pcaptures=true.
-            all { it.systemProperty("captures", project.findProperty("captures")?.toString() ?: "false") }
+            // Parcours de captures d'écran (ScreenCaptureTest) activé par -Pcaptures=true ; taille de police par -PcapturesFontScale.
+            all {
+                it.systemProperty("captures", project.findProperty("captures")?.toString() ?: "false")
+                it.systemProperty("capturesFontScale", project.findProperty("capturesFontScale")?.toString() ?: "1.3")
+            }
         }
     }
 }
