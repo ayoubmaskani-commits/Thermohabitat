@@ -363,7 +363,9 @@ fun MeasureScreen(nav: NavController, vm: MeasureViewModel = hiltViewModel()) {
     } else null
     val result: MeasurementResult? = attempt?.getOrNull()
     val resultBring = remember { BringIntoViewRequester() }
-    LaunchedEffect(result != null) { if (result != null) { withFrameNanos { }; resultBring.bringIntoView() } }
+    // Défilement vers le résultat à la pose du 4e point seulement : pas pendant la saisie de la longueur réelle,
+    // qui doit rester visible au-dessus du clavier.
+    LaunchedEffect(points.size == 4) { if (result != null) { withFrameNanos { }; resultBring.bringIntoView() } }
     ScreenScaffold(title = "Mesure sur photo", onBack = { nav.popBackStack() }) { padding ->
         ScrollColumn(padding) {
             val b = bitmap

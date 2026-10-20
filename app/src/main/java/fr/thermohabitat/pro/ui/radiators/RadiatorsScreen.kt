@@ -68,6 +68,7 @@ import fr.thermohabitat.thermal.calc.PowerBasis
 import fr.thermohabitat.thermal.calc.RadiatorPower
 import fr.thermohabitat.thermal.calc.Regime
 import fr.thermohabitat.thermal.model.Radiator
+import fr.thermohabitat.thermal.model.RadiatorType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -242,6 +243,16 @@ fun dimensionsText(r: Radiator): String {
     if (r.lengthMm != null) parts += "L ${Fmt.num(r.lengthMm, 0)}"
     if (r.depthMm != null) parts += "P ${Fmt.num(r.depthMm, 0)}"
     val dims = if (parts.isEmpty()) "Dimensions à relever" else parts.joinToString(" × ") + " mm"
-    val sec = listOfNotNull(r.sections?.let { "$it éléments" }, r.columns?.let { "$it colonnes" }, r.panelType?.name?.removePrefix("T")?.let { "type $it" })
+    fun count(n: Int, one: String, many: String) = "$n ${if (n > 1) many else one}"
+    // Éléments et colonnes pour les radiateurs à éléments, type seulement pour les panneaux acier
+    // (un type de panneau resté d'une saisie précédente n'est pas affiché pour une fonte).
+    val panel = r.type == RadiatorType.STEEL_PANEL
+    val sec = listOfNotNull(
+        r.sections?.takeIf { !panel }?.let { count(it, "élément", "éléments") },
+        r.columns?.takeIf { !panel }?.let {
+            if (r.type == RadiatorType.CAST_IRON_PLATE) count(it, "plaque", "plaques") else count(it, "colonne", "colonnes")
+        },
+        r.panelType?.takeIf { panel }?.name?.removePrefix("T")?.let { "type $it" },
+    )
     return (listOf(dims) + sec).joinToString(" · ")
 }

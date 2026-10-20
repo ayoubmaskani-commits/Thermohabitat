@@ -198,16 +198,19 @@ fun RoomEditScreen(nav: NavController, vm: RoomEditViewModel = hiltViewModel()) 
         val radiators = p?.project?.building?.radiatorsIn(r.id).orEmpty()
         ScrollColumn(padding) {
             // Bilan en tête : le résultat cherché est visible sans faire défiler tout le formulaire.
-            if (rl != null) {
+            // La carte est toujours présente (« Calcul… » le temps du premier calcul) et sa hauteur varie peu :
+            // le formulaire placé dessous ne saute pas à l'ouverture ni à la création des parois.
+            if (rl == null) {
+                SectionCard("Bilan de la pièce", icon = Icons.Filled.LocalFireDepartment, subtitle = "Calcul…") {
+                    ValueRow("Besoin de chauffage", "…", emphasize = true)
+                }
+            } else {
                 SectionCard("Bilan de la pièce", icon = Icons.Filled.LocalFireDepartment,
                     subtitle = "Intérieur ${Fmt.temp(rl.setpointC)} · extérieur de base ${Fmt.temp(rl.designOutdoorC)}") {
-                    if (room?.surfaces.isNullOrEmpty()) {
-                        InfoBanner("Bilan incomplet : aucune paroi saisie (air seulement). Utilisez l'assistant de la section « Parois ».",
-                            kind = BannerKind.WARNING)
-                    }
                     cov?.let { StatusChip(it.status) }
                     ValueRow("Besoin de chauffage", "${Fmt.watts(rl.totalW)} · ${Fmt.num(rl.wattsPerM2, 0)} W/m²", emphasize = true)
                     ValueRow("Radiateurs validés", if (radiators.isEmpty()) "Aucun radiateur" else Fmt.watts(cov?.availableW))
+                    ValueRow("Parois", room?.surfaces?.size?.takeIf { it > 0 }?.let { "$it saisie(s)" } ?: "Aucune : bilan incomplet")
                     cov?.pendingRadiators?.takeIf { it > 0 }?.let { n ->
                         Text("$n radiateur(s) en attente de validation, non compté(s).", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -393,8 +393,10 @@ private fun ProjectCard(p: AnalyzedProject, active: Boolean, onClick: () -> Unit
             }
             if (p.project.building.rooms.isEmpty()) {
                 // Pas de « 0,00 kW » ni de couverture sans objet : l'étude reste à compléter.
-                Text("Étude à compléter : aucune pièce saisie", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "Étude à compléter : aucune pièce saisie" + if (r.radiatorCount > 0) " · ${plural(r.radiatorCount, "radiateur")}" else "",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             } else {
                 Text("${Fmt.area(r.heatLoss.heatedAreaM2)} · ${Fmt.volume(r.heatLoss.heatedVolumeM3)} · ${plural(p.project.building.rooms.size, "pièce")} · ${plural(r.radiatorCount, "radiateur")}",
                     style = MaterialTheme.typography.bodyMedium)

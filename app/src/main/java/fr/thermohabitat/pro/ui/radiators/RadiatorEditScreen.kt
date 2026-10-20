@@ -97,6 +97,7 @@ import fr.thermohabitat.pro.ui.util.AutoSaver
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.calc.CoverageStatus
 import fr.thermohabitat.thermal.calc.PowerBasis
+import fr.thermohabitat.thermal.calc.CoverageAnalyzer
 import fr.thermohabitat.thermal.calc.RadiatorPower
 import fr.thermohabitat.thermal.calc.Regime
 import fr.thermohabitat.thermal.library.RadiatorLibrary
@@ -333,7 +334,8 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
         val rooms = project?.project?.rooms?.map { it.room }.orEmpty()
         val room = rooms.firstOrNull { it.id == r.roomId }
         val mainPhoto = photos.firstOrNull { it.kind == PhotoKind.FRONT } ?: photos.firstOrNull()
-        val study = project?.let { it.project.settings.studyRegime }
+        val settings = project?.project?.settings
+        val study = settings?.studyRegime
         val ambient = ambientOverride ?: room?.setpointC ?: 20.0
         ScrollColumn(padding) {
             // --- Fiche de synthèse « Radiateur identifié » ---
@@ -355,8 +357,9 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                 if (nominal == null) {
                     InfoBanner("Puissance inconnue : identifiez le type et relevez les dimensions, ou saisissez la puissance documentée, " +
                         "dans les sections ci-dessous.", kind = BannerKind.WARNING)
-                } else if (study != null) {
-                    val out = RadiatorPower.outputOf(model, study.supplyC, study.returnC, ambient)
+                } else if (study != null && settings != null) {
+                    // Même calcul que le bilan : mode hydraulique de l'étude et consigne de la pièce (pas l'ambiance d'essai).
+                    val out = CoverageAnalyzer.outputFor(model, study.supplyC, settings.modeFor(study), room?.setpointC ?: settings.radiatorSheetAmbientC)
                     ValueRow("Puissance à ${study.label} (régime de l'étude)", if (out.powerW > 0) Fmt.watts(out.powerW) else "Non calculable", emphasize = true)
                 }
                 ValueRow("Type", r.type.label)
@@ -506,7 +509,8 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                         // Une valeur par ligne, régime de l'étude mis en avant ; « – » si le régime ne chauffe pas à cette ambiance.
                         Regime.STANDARD.forEach { reg ->
                             val out = RadiatorPower.outputOf(model, reg.supplyC, reg.returnC, ambient)
-                            val isStudy = reg == study
+                            // « (étude) » seulement si ce tableau calcule comme le bilan (écart constant, consigne de la pièce).
+                            val isStudy = reg == study && settings?.fixedFlow != true && ambientOverride == null
                             ValueRow(if (isStudy) "${reg.label} (étude)" else reg.label, if (out.powerW > 0) Fmt.watts(out.powerW) else "–", emphasize = isStudy)
                         }
                         // Même facteur de correction pour la valeur et ses bornes : la plage relative, identique à tous les régimes, est donnée une fois.

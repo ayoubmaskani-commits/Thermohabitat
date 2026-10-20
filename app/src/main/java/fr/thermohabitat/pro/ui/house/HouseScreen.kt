@@ -156,8 +156,11 @@ fun HouseScreen(nav: NavController, vm: HouseViewModel = hiltViewModel()) {
                         caption = c?.let {
                             when {
                                 it.needW <= 0 -> "Pas de besoin"
-                                it.status == CoverageStatus.NO_EMITTER -> "${Fmt.watts(it.needW)} · sans radiateur"
-                                else -> "${Fmt.watts(it.needW)} · couvert à ${Fmt.pct(it.availableW / it.needW)}"
+                                // Radiateurs scannés mais pas encore validés : ne pas laisser croire qu'il n'y en a aucun.
+                                it.status == CoverageStatus.NO_EMITTER ->
+                                    "${Fmt.watts(it.needW)} · " + if (it.pendingRadiators > 0) "${it.pendingRadiators} à valider" else "sans radiateur"
+                                // Légende courte : le pourcentage reste visible dans les petites pièces.
+                                else -> "${Fmt.watts(it.needW)} · ${Fmt.pct(it.availableW / it.needW)}"
                             }
                         })
                 }
@@ -165,7 +168,7 @@ fun HouseScreen(nav: NavController, vm: HouseViewModel = hiltViewModel()) {
                 ActionRow {
                     val s = LocalStatusColors.current
                     LegendDot(s.sufficient, "Suffisant"); LegendDot(s.limit, "Limite")
-                    LegendDot(s.insufficient, "Insuffisant ou sans radiateur"); LegendDot(s.neutral, "Pas de besoin")
+                    LegendDot(s.insufficient, "Insuffisant ou sans radiateur validé"); LegendDot(s.neutral, "Pas de besoin")
                 }
                 Text("Couverture : part du besoin fournie par les radiateurs validés, avec une eau à ${coverage.supplyC.toInt()} °C.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
