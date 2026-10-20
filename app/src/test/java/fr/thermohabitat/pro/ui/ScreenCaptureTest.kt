@@ -2,12 +2,16 @@ package fr.thermohabitat.pro.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
 import dagger.hilt.android.testing.HiltTestApplication
@@ -71,25 +75,32 @@ class ScreenCaptureTest {
     @Test
     fun parcoursDesEcrans() {
         step("01_accueil_vide") { }
-        step("02_nouvelle_etude") { click("Créer une étude thermique") }
-        step("03_simulations_etude_vide") { back(); tab("Simulations") }
-        step("04_energie_etude_vide") { click("Consommations et coûts") }
-        step("05_accueil_exemple") {
+        step("02_nouvelle_etude") { click("Créer une étude thermique"); waitFor("Nom du projet") }
+        step("03_nouvelle_etude_bas") { scrollToEnd() }
+        step("04_accueil_etude_vide") { back(); tab("Accueil") }
+        step("05_maison_etude_vide") { tab("Maison") }
+        step("06_simulations_etude_vide") { tab("Simulations") }
+        step("07_pac_etude_vide") { click("Pompe à chaleur et loi d'eau") }
+        step("08_energie_etude_vide") { back(); click("Consommations et coûts") }
+        step("09_accueil_exemple") {
             back(); tab("Accueil")
-            click("Charger le projet d'exemple")
+            click("projet d'exemple")
             waitFor("Puissance nécessaire")
         }
-        step("06_maison") { tab("Maison"); waitFor("Salon") }
-        step("07_piece_salon") { click("Salon") }
-        step("08_radiateurs") { back(); tab("Radiateurs"); waitFor("R01") }
-        step("09_fiche_radiateur") { click("R01") }
-        step("10_simulations") { back(); tab("Simulations"); waitFor("Compatibilité PAC") }
-        step("11_comparaison") { click("Comparer besoins et radiateurs") }
-        step("12_pac") { back(); click("Pompe à chaleur et loi d'eau") }
-        step("13_refroidissement") { back(); click("Refroidissement et inertie") }
-        step("14_scenarios") { back(); click("Scénarios d'amélioration") }
-        step("15_energie") { back(); click("Consommations et coûts") }
-        step("16_rapports") { back(); tab("Rapports") }
+        step("10_maison") { tab("Maison"); waitFor("Salon") }
+        step("11_piece_salon") { click("Salon") }
+        step("12_radiateurs") { back(); tab("Radiateurs"); waitFor("R01") }
+        step("13_fiche_radiateur") { click("R01") }
+        step("14_simulations") { back(); tab("Simulations"); waitFor("Comparer besoins et radiateurs") }
+        step("15_comparaison") { click("Comparer besoins et radiateurs") }
+        step("16_pac") { back(); click("Pompe à chaleur et loi d'eau") }
+        step("17_pac_bas") { scrollToEnd() }
+        step("18_refroidissement") { back(); click("Refroidissement et inertie") }
+        step("19_scenarios") { back(); click("Scénarios d'amélioration") }
+        step("20_energie") { back(); click("Consommations et coûts") }
+        step("21_energie_bas") { scrollToEnd() }
+        step("22_rapports") { back(); tab("Rapports") }
+        step("23_reglages") { compose.onNodeWithContentDescription("Réglages").performClick(); settle() }
         File(dir, "errors.txt").writeText(errors.joinToString("\n", postfix = "\n"))
     }
 
@@ -117,6 +128,12 @@ class ScreenCaptureTest {
         val node = compose.onAllNodesWithText(text, substring = true).onFirst()
         runCatching { node.performScrollTo() }
         node.performClick()
+        settle()
+    }
+
+    /** Fait défiler la page jusqu'en bas (capture de la fin des longs formulaires). */
+    private fun scrollToEnd() {
+        compose.onAllNodes(hasScrollAction()).onFirst().performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 100_000f) }
         settle()
     }
 
