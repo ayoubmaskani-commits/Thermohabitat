@@ -48,10 +48,31 @@ enum class MatchLevel(val label: String) {
     UNDETERMINED("Non départagé"),
 }
 
+/** Origine du pas d'élément utilisé pour le rapprochement. */
+enum class PitchSource(val label: String) {
+    MEASURED("mesuré"),
+    FROM_LENGTH("déduit de la longueur et du nombre d'éléments"),
+    FROM_PROPORTIONS("déduit des proportions de la photo et de la hauteur mesurée"),
+}
+
+/**
+ * Puissances documentées d'éléments comparables d'une catégorie (hauteur ± 12 %, profondeur ± 20 %, mêmes colonnes
+ * quand elles sont connues), à titre de comparaison : la puissance du radiateur se calcule avec ses propres mesures.
+ * @property indicative vrai pour un ordre de grandeur (profil propre à chaque modèle, valeur calculée, témoignage) ;
+ *   faux seulement pour des valeurs tabulées aux cotes normalisées (DIN) quand hauteur et profondeur sont connues
+ */
+data class ElementPowerHint(
+    val rangeW: ClosedFloatingPointRange<Double>,
+    val references: List<ElementPowerReference>,
+    val indicative: Boolean,
+    val text: String,
+)
+
 /**
  * Plausibilité d'une catégorie au vu des mesures.
  * @property score produit des facteurs des critères (1 : tout ce qui est mesuré concorde), sert au classement
  * @property suggestedColumns colonnes déduites (catégorie à colonnes fixes, mesure compatible ou profondeur), sinon null
+ * @property power puissances d'éléments comparables (hauteur connue), sinon null
  */
 data class CategoryMatch(
     val category: RadiatorCategory,
@@ -59,11 +80,15 @@ data class CategoryMatch(
     val level: MatchLevel,
     val reasons: List<MatchReason>,
     val suggestedColumns: Int?,
+    val power: ElementPowerHint? = null,
 ) {
+    /** Faux si le motif compté sur la photo serait des cannelures (panneau) : le nombre n'est pas un nombre d'éléments. */
+    val countsElements: Boolean get() = category.countsElements
+
     /** Verdict suivi des raisons principales (contradictions d'abord). */
     val summary: String
         get() {
-            val main = reasons.filter { it.effect != MatchEffect.NEUTRAL }.sortedBy { it.effect.ordinal * -1 }.take(3)
+            val main = reasons.filter { it.effect != MatchEffect.NEUTRAL }.sortedByDescending { it.effect.ordinal }.take(3)
             return if (main.isEmpty()) "${level.label} : aucune mesure à comparer"
             else "${level.label} : " + main.joinToString(" ; ") { it.text }
         }
@@ -72,19 +97,22 @@ data class CategoryMatch(
 /**
  * Résultat du rapprochement, catégories de la plus à la moins plausible (ordre de la bibliothèque à égalité).
  * @property informative faux si aucune mesure n'a pu être comparée (ordre de la bibliothèque, verdicts « non départagé »)
- * @property notes explications générales (données manquantes, mesures complémentaires utiles)
- * @property pitchMm pas utilisé : mesuré, ou déduit de la longueur et du nombre d'éléments ([pitchDerived])
+ * @property notes explications générales (données manquantes, recouvrements, mesures complémentaires utiles)
+ * @property pitchMm pas utilisé (mesuré ou déduit, voir [pitchSource]), null si inconnu
  */
 data class MatchResult(
     val matches: List<CategoryMatch>,
     val informative: Boolean,
     val notes: List<String>,
     val pitchMm: DimensionEstimate?,
-    val pitchDerived: Boolean,
+    val pitchSource: PitchSource?,
 ) {
+    /** Vrai si le pas n'est pas mesuré directement (longueur ÷ nombre, proportions × hauteur). */
+    val pitchDerived: Boolean get() = pitchSource != null && pitchSource != PitchSource.MEASURED
+
     val best: CategoryMatch? get() = if (informative) matches.firstOrNull() else null
 
-    /** Groupe de tête : catégories dont le score atteint 75 % du meilleur (vide sans mesure exploitable). */
+    /** Groupe de tête : catégories non contredites dont le score atteint 75 % du meilleur (vide sans mesure exploitable). */
     val leading: List<CategoryMatch>
         get() {
             val b = best ?: return emptyList()
@@ -97,11 +125,11 @@ data class MatchResult(
 
 /**
  * Caractéristiques d'un radiateur à rapprocher de la bibliothèque. Toutes sont facultatives.
- * Incertitudes : incertitudes-types (mm) des [DimensionEstimate].
+ * Incertitudes : incertitudes-types (mm) des [DimensionEstimate] ; incertitude inconnue (NaN) : 10 % de la valeur.
  *
- * @property pitchMm pas d'élément (d'axe en axe), MESURÉ (jamais un pas standard supposé)
- * @property sections nombre d'éléments : avec [lengthMm], donne le pas quand il n'est pas mesuré
- * @property pitchToHeight pas / hauteur sans échelle (photo sans référence), utilisé seulement si le pas est inconnu
+ * @property pitchMm pas d'élément (d'axe en axe), MESURÉ ou calculé depuis une longueur mesurée (jamais un pas standard supposé)
+ * @property sections nombre d'éléments : avec [lengthMm], donne le pas quand il n'est pas fourni
+ * @property pitchToHeight pas / hauteur sans échelle (photo sans référence) ; avec [heightMm] mesurée, donne le pas
  * @property pitchToHeightRelUncertainty incertitude relative de [pitchToHeight]
  * @property pattern motif vu de face indiqué par l'utilisateur
  * @property type type déjà connu (sinon null)
@@ -119,18 +147,22 @@ data class RadiatorMeasurements(
     val type: RadiatorType? = null,
 ) {
     /**
-     * Mêmes mesures pour un autre nombre d'éléments [count] : le pas est recalculé (longueur ÷ nombre, ou pas × ancien
-     * nombre ÷ nouveau), ainsi que le rapport pas / hauteur. Sert à comparer des nombres alternatifs (harmoniques).
+     * Mêmes mesures pour un autre nombre d'éléments [count] (comparaison des nombres alternatifs d'un comptage).
+     * Le pas et le rapport pas / hauteur sont supposés venir de la longueur divisée par le nombre (cas de la photo) :
+     * ils sont mis à l'échelle ancien nombre ÷ nouveau. Sans ancien nombre, le pas fourni est retiré et sera déduit
+     * de la longueur s'il y en a une ; la longueur, la hauteur et la profondeur ne changent pas.
      */
     fun forCount(count: Int): RadiatorMeasurements {
         require(count >= 1) { "Nombre d'éléments invalide" }
-        val old = sections
+        val old = sections?.takeIf { it >= 1 }
+        val k = old?.let { it.toDouble() / count }
         val pitch = when {
+            pitchMm == null -> null
+            k != null -> DimensionEstimate(pitchMm.valueMm * k, pitchMm.uncertaintyMm * k)
             lengthMm != null -> null
-            pitchMm != null && old != null -> DimensionEstimate(pitchMm.valueMm * old / count, pitchMm.uncertaintyMm * old / count)
             else -> pitchMm
         }
-        val ratio = if (pitchToHeight != null && old != null) pitchToHeight * old / count else pitchToHeight
+        val ratio = pitchToHeight?.let { r -> if (k != null) r * k else r }
         return copy(pitchMm = pitch, pitchToHeight = ratio, sections = count)
     }
 
@@ -139,13 +171,12 @@ data class RadiatorMeasurements(
         const val DEFAULT_RATIO_UNCERTAINTY = 0.10
 
         /** Part d'incertitude ajoutée au rapport pas / hauteur d'une photo : bords détectés et pointé des coins. */
-        private const val PHOTO_RATIO_EXTRA = 0.05
+        const val PHOTO_RATIO_EXTRA = 0.05
 
         /**
          * Mesures tirées d'une analyse de photo pour [count] éléments (proposé ou corrigé par l'utilisateur).
-         * Pas, hauteur et longueur ne sont retenus que s'ils sont MESURÉS (référence métrique) : avec un pas standard
-         * supposé, ils découleraient de l'hypothèse ; seul le rapport pas / hauteur, indépendant de l'échelle, est gardé.
-         * Le motif n'est pas déduit de la photo (éléments et cannelures se ressemblent) : le pas les départage.
+         * Voir [fromPhotoDimensions] ; l'incertitude des proportions vient de l'objet à 4 coins s'il y en a un,
+         * sinon du rapport d'aspect estimé par la perspective.
          */
         fun fromPhoto(
             photo: PhotoIdentification,
@@ -156,13 +187,33 @@ data class RadiatorMeasurements(
         ): RadiatorMeasurements {
             val n = count?.takeIf { it >= 1 }
             val dims = if (n != null) photo.dimensionsFor(n) else PhotoDimensions(null, photo.heightMm, photo.lengthMm, photo.dimensionsOrigin)
-            val measured = dims.origin == ValueOrigin.MEASURED
-            val ratio = n?.let { photo.bodyAspectRatio / it }?.takeIf { it.isFinite() && it > 0 }
-            val ratioRel = if (photo.aspectMeasured) {
-                sqrt(listOfNotNull(dims.lengthMm, dims.heightMm).sumOf { it.relativeUncertainty * it.relativeUncertainty }).coerceAtLeast(0.03)
+            val aspectRel = if (photo.aspectMeasured) {
+                sqrt(listOfNotNull(dims.lengthMm, dims.heightMm).sumOf { sq(it.relativeUncertainty) }).coerceAtLeast(0.03)
             } else {
-                sqrt(photo.aspect.relativeUncertainty * photo.aspect.relativeUncertainty + PHOTO_RATIO_EXTRA * PHOTO_RATIO_EXTRA)
+                sqrt(sq(photo.aspect.relativeUncertainty) + sq(PHOTO_RATIO_EXTRA))
             }
+            return fromPhotoDimensions(n, dims, photo.bodyAspectRatio, aspectRel, depthMm, columns, type)
+        }
+
+        /**
+         * Mesures tirées des dimensions d'une photo pour [count] éléments.
+         * Pas, hauteur et longueur ne sont retenus que s'ils sont MESURÉS (référence métrique) : avec un pas standard
+         * supposé, ils découleraient de l'hypothèse et favoriseraient à tort la catégorie supposée. Le rapport
+         * pas / hauteur = ([bodyAspectRatio] longueur / hauteur du corps) ÷ [count], indépendant de l'échelle, est
+         * toujours gardé. Le motif n'est pas déduit de la photo (éléments et cannelures se ressemblent) : le pas les départage.
+         */
+        fun fromPhotoDimensions(
+            count: Int?,
+            dims: PhotoDimensions,
+            bodyAspectRatio: Double?,
+            aspectRelUncertainty: Double = DEFAULT_RATIO_UNCERTAINTY,
+            depthMm: DimensionEstimate? = null,
+            columns: Int? = null,
+            type: RadiatorType? = null,
+        ): RadiatorMeasurements {
+            val n = count?.takeIf { it >= 1 }
+            val measured = dims.origin == ValueOrigin.MEASURED
+            val ratio = n?.let { c -> bodyAspectRatio?.let { it / c } }?.takeIf { it.isFinite() && it > 0 }
             return RadiatorMeasurements(
                 pitchMm = dims.pitchMm.takeIf { measured },
                 heightMm = dims.heightMm.takeIf { measured },
@@ -170,7 +221,7 @@ data class RadiatorMeasurements(
                 depthMm = depthMm,
                 sections = n,
                 pitchToHeight = ratio,
-                pitchToHeightRelUncertainty = ratioRel,
+                pitchToHeightRelUncertainty = aspectRelUncertainty,
                 columns = columns,
                 type = type,
             )
@@ -198,6 +249,8 @@ data class RadiatorMeasurements(
             ValueOrigin.ESTIMATED -> 0.08 * valueMm
             ValueOrigin.UNKNOWN -> 0.15 * valueMm
         }
+
+        private fun sq(x: Double) = x * x
     }
 }
 
@@ -210,6 +263,8 @@ data class CountPlausibility(
     val bestCategory: RadiatorCategory?,
     val pitchMm: DimensionEstimate?,
     val text: String,
+    /** Rapprochement complet pour ce nombre. */
+    val result: MatchResult,
 )
 
 /**
@@ -219,7 +274,16 @@ data class CountPlausibility(
  * (incertitude comprise), décroissance gaussienne au-delà, plancher qui n'exclut jamais une catégorie (documentations
  * incomplètes). Un critère que la catégorie ne documente pas compte pour [NEUTRAL_FACTOR] : une catégorie confirmée
  * par la mesure passe devant une catégorie où rien n'est vérifiable. Le score est le produit des facteurs.
- * Le résultat est une PROPOSITION motivée : l'utilisateur choisit et valide.
+ * Les proportions sans échelle (pas / hauteur) sont comparées à la plage PROPRE à chaque catégorie (pas / hauteurs
+ * documentés), jamais à une plage globale. Le résultat est une PROPOSITION motivée : l'utilisateur choisit et valide.
+ *
+ * Utilisation par l'écran photo :
+ * ```
+ * val r = RadiatorMatcher.matchPhoto(photo, count = n, depthMm = profondeurMesuree)
+ * r.leading            // catégories proposées (score, verdict, raisons)
+ * r.notes              // explications générales (sans échelle, recouvrements, cannelures…)
+ * RadiatorMatcher.compareCounts(listOf(13, 26, 7)) { RadiatorMeasurements.fromPhoto(photo, it) }  // alternatives
+ * ```
  */
 object RadiatorMatcher {
 
@@ -251,60 +315,48 @@ object RadiatorMatcher {
     private const val PATTERN_PARTIAL = 0.5
     private const val PATTERN_MISMATCH = 0.1
     private const val UNCERTAIN_PITCH_REL = 0.12
+    private const val UNKNOWN_UNCERTAINTY_REL = 0.10
+    /** Catégories citées au plus dans une note de recouvrement. */
+    private const val MAX_LISTED = 6
 
     /** Classe [categories] selon leur compatibilité avec [measurements], avec scores et raisons. */
     fun match(measurements: RadiatorMeasurements, categories: List<RadiatorCategory> = RadiatorLibrary.categories): MatchResult {
         val m = sanitized(measurements)
         val notes = ArrayList<String>()
-
-        // Pas : mesuré, sinon déduit de la longueur et du nombre d'éléments.
-        var pitch = m.pitchMm
-        var derived = false
-        if (pitch == null && m.lengthMm != null && m.sections != null && m.sections >= 2) {
-            val n = m.sections
-            pitch = DimensionEstimate(m.lengthMm.valueMm / n, sqrt(sq(m.lengthMm.uncertaintyMm) + sq(END_CAPS_MM)) / n)
-            derived = true
-            notes += "Pas déduit de la longueur et du nombre d'éléments (${num(m.lengthMm.valueMm, 0)} mm ÷ $n ≈ ${num(pitch.valueMm, 1)} mm) : " +
-                "légèrement surestimé si la longueur inclut les bouchons d'extrémité"
-        }
-        // Le rapport pas / hauteur n'apporte rien de plus quand le pas est mesuré.
+        val (pitch, source) = pitchOf(m, notes)
+        // Le rapport pas / hauteur n'apporte rien de plus quand le pas est connu.
         val ratio = if (pitch == null) m.pitchToHeight else null
 
         val informative = pitch != null || ratio != null || m.heightMm != null || m.depthMm != null ||
             m.columns != null || m.pattern != null || m.type != null
-        val evaluated = categories.map { evaluate(it, m, pitch, ratio, informative) }
-        val sorted = evaluated.sortedByDescending { it.score }
-        val result = MatchResult(sorted, informative, notes, pitch, derived)
-
+        val sorted = categories.map { evaluate(it, m, pitch, ratio, informative) }.sortedByDescending { it.score }
         if (!informative) {
             notes += "Aucune mesure exploitable : catégories dans l'ordre de la bibliothèque. Mesurez la profondeur, comptez les " +
                 "colonnes vues de dessus ou ajoutez une échelle sur la photo (carte bancaire, feuille A4, dimension mesurée)."
-            return result
+            return MatchResult(sorted, false, notes, null, null)
         }
-        if (pitch == null && ratio != null) {
-            notes += "Sans échelle, seules les proportions des éléments sont comparées : rapprochement peu discriminant. Une carte " +
-                "bancaire ou une feuille A4 plaquée contre la façade, ou une dimension mesurée au mètre, permet de mesurer le pas."
-        } else if (pitch == null) {
-            notes += "Pas d'élément inconnu : le rapprochement repose sur les autres mesures."
-        }
-        if (pitch != null && pitch.relativeUncertainty > UNCERTAIN_PITCH_REL) {
-            notes += "Pas incertain (± ${num(pitch.uncertaintyMm, 0)} mm) : il départage mal les catégories."
-        }
-        val leading = result.leading
-        if (leading.size >= 2) {
-            notes += if (m.depthMm == null || m.columns == null) {
-                "Plusieurs catégories restent compatibles : la profondeur (du mur à l'avant de l'élément) et le nombre de colonnes " +
-                    "vus de dessus permettent de les départager."
-            } else {
-                "Plusieurs catégories restent compatibles : comparez les indices visuels (vue de dessus, décor, matériau)."
-            }
-        }
-        return result
+        val draft = MatchResult(sorted, true, emptyList(), pitch, source)
+        notes += generalNotes(draft, m, pitch, ratio)
+        return draft.copy(notes = notes)
     }
 
     /**
-     * Compare des nombres d'éléments candidats (proposé et alternatives d'un comptage) : pour chacun, la meilleure
-     * catégorie de la bibliothèque avec les mesures correspondantes. Ordre des candidats conservé.
+     * Rapprochement d'une analyse de photo pour [count] éléments (proposé, alternative ou corrigé par l'utilisateur),
+     * complété des mesures prises sur place ([depthMm] au mètre, [columns] vues de dessus, [type] connu).
+     */
+    fun matchPhoto(
+        photo: PhotoIdentification,
+        count: Int? = photo.count,
+        depthMm: DimensionEstimate? = null,
+        columns: Int? = null,
+        type: RadiatorType? = null,
+        categories: List<RadiatorCategory> = RadiatorLibrary.categories,
+    ): MatchResult = match(RadiatorMeasurements.fromPhoto(photo, count, depthMm, columns, type), categories)
+
+    /**
+     * Compare des nombres d'éléments candidats (proposé et alternatives d'un comptage) : pour chacun, le rapprochement
+     * complet et sa meilleure catégorie. Ordre des candidats conservé ; un nombre dont le pas ne correspond à aucun
+     * radiateur documenté ressort « peu probable ».
      */
     fun compareCounts(
         counts: List<Int>,
@@ -319,14 +371,78 @@ object RadiatorMatcher {
             m.pitchToHeight != null -> "éléments ≈ ${times(1 / m.pitchToHeight)} fois plus hauts que larges"
             else -> null
         }
-        val text = if (b == null) "$n éléments : aucune mesure pour départager"
-        else "$n éléments" + (what?.let { " ($it)" } ?: "") + " : au mieux « ${b.category.title} » (${b.level.label.lowercase()})"
-        CountPlausibility(n, b?.score ?: 0.0, b?.level ?: MatchLevel.UNDETERMINED, b?.category, r.pitchMm, text)
+        val head = "$n éléments" + (what?.let { " ($it)" } ?: "")
+        val text = if (b == null) "$head : aucune mesure pour départager" else {
+            val lead = r.leading
+            val names = lead.take(2).joinToString(", ") { "« ${it.category.title} »" } +
+                if (lead.size > 2) " et ${lead.size - 2} autre${if (lead.size > 3) "s" else ""}" else ""
+            "$head : ${b.level.label.lowercase()} — $names"
+        }
+        CountPlausibility(n, b?.score ?: 0.0, b?.level ?: MatchLevel.UNDETERMINED, b?.category, r.pitchMm, text, r)
     }
 
     /** Variante : mêmes mesures de base recalculées pour chaque nombre ([RadiatorMeasurements.forCount]). */
     fun compareCounts(counts: List<Int>, base: RadiatorMeasurements, categories: List<RadiatorCategory> = RadiatorLibrary.categories): List<CountPlausibility> =
         compareCounts(counts, categories) { base.forCount(it) }
+
+    // --- Pas et notes générales ---
+
+    /** Pas utilisé : mesuré, sinon longueur ÷ nombre d'éléments, sinon proportions × hauteur mesurée. */
+    private fun pitchOf(m: RadiatorMeasurements, notes: MutableList<String>): Pair<DimensionEstimate?, PitchSource?> {
+        m.pitchMm?.let { return it to PitchSource.MEASURED }
+        if (m.lengthMm != null && m.sections != null && m.sections >= 2) {
+            val n = m.sections
+            val p = DimensionEstimate(m.lengthMm.valueMm / n, sqrt(sq(m.lengthMm.uncertaintyMm) + sq(END_CAPS_MM)) / n)
+            notes += "Pas déduit de la longueur et du nombre d'éléments (${num(m.lengthMm.valueMm, 0)} mm ÷ $n ≈ ${num(p.valueMm, 1)} mm) : " +
+                "légèrement surestimé si la longueur inclut les bouchons d'extrémité."
+            return p to PitchSource.FROM_LENGTH
+        }
+        if (m.pitchToHeight != null && m.heightMm != null) {
+            val v = m.pitchToHeight * m.heightMm.valueMm
+            val rel = sqrt(sq(m.pitchToHeightRelUncertainty) + sq(m.heightMm.relativeUncertainty))
+            val p = DimensionEstimate(v, v * rel)
+            notes += "Pas déduit des proportions de la photo et de la hauteur mesurée (${num(m.heightMm.valueMm, 0)} mm) : ≈ ${pm(p)}."
+            return p to PitchSource.FROM_PROPORTIONS
+        }
+        return null to null
+    }
+
+    private fun generalNotes(r: MatchResult, m: RadiatorMeasurements, pitch: DimensionEstimate?, ratio: Double?): List<String> {
+        val notes = ArrayList<String>()
+        if (pitch == null && ratio != null) {
+            notes += "Sans échelle, seules les proportions des éléments sont comparées : rapprochement peu discriminant. Une carte " +
+                "bancaire ou une feuille A4 plaquée contre la façade, ou une dimension mesurée au mètre, permet de mesurer le pas."
+        } else if (pitch == null) {
+            notes += "Pas d'élément inconnu : le rapprochement repose sur les autres mesures."
+        }
+        if (pitch != null && pitch.relativeUncertainty > UNCERTAIN_PITCH_REL) {
+            notes += "Pas incertain (± ${num(pitch.uncertaintyMm, 0)} mm) : il départage mal les catégories."
+        }
+        val leading = r.leading
+        // Garde-fou : un motif régulier peut être les cannelures d'un panneau et non des éléments.
+        if (pitch != null || ratio != null) {
+            leading.filter { !it.countsElements && it.category.flutePitchRangeMm != null }.forEach { f ->
+                notes += "« ${f.category.title} » : un motif au pas de ${rangeMmText(f.category.flutePitchRangeMm!!)} peut être des " +
+                    "cannelures et non des éléments. Vérifiez vu de dessus (panneaux, ailettes, grille) : sur un panneau, le nombre " +
+                    "compté est celui des cannelures et ne sert pas au calcul de la puissance."
+            }
+        }
+        if (leading.size >= 2) {
+            notes += when {
+                m.depthMm == null -> {
+                    val withDepth = leading.filter { it.category.depthRangeMm != null }
+                    val listed = withDepth.take(MAX_LISTED).joinToString(" ; ") { "${it.category.title} ${rangeInt(it.category.depthRangeMm!!)}" } +
+                        if (withDepth.size > MAX_LISTED) " ; …" else ""
+                    "Plusieurs catégories restent compatibles : la profondeur (du mur à l'avant de l'élément) les départage" +
+                        (if (listed.isNotEmpty()) " ($listed)" else "") +
+                        (if (m.columns == null) ", ainsi que le nombre de colonnes vu de dessus." else ".")
+                }
+                m.columns == null -> "Plusieurs catégories restent compatibles : le nombre de colonnes (tubes vus de dessus) les départage."
+                else -> "Plusieurs catégories restent compatibles : comparez les indices visuels (vue de dessus, décor, matériau)."
+            }
+        }
+        return notes
+    }
 
     // --- Évaluation d'une catégorie ---
 
@@ -356,7 +472,7 @@ object RadiatorMatcher {
             m.depthMm != null -> cat.columnsForDepth(m.depthMm.valueMm)
             else -> null
         }
-        return CategoryMatch(cat, score, level, reasons, suggested)
+        return CategoryMatch(cat, score, level, reasons, suggested, powerHint(cat, m, m.columns ?: suggested))
     }
 
     private fun typeReason(cat: RadiatorCategory, type: RadiatorType): MatchReason =
@@ -388,7 +504,7 @@ object RadiatorMatcher {
         cat.flutePitchRangeMm?.let { r ->
             val (f, side) = interval(p.valueMm, p.uncertaintyMm, r.start, r.endInclusive, PITCH_MARGIN_MM, PITCH_FLOOR)
             val e = effectOf(f)
-            val text = if (e == MatchEffect.SUPPORTS) "$what : correspond aux cannelures d'un panneau (${range(r)}), le motif compté ne serait pas des éléments"
+            val text = if (e == MatchEffect.SUPPORTS) "$what : correspond aux cannelures d'un panneau (${range(r)}) ; le motif compté ne serait pas des éléments"
             else "$what ${compared(e, side, false)} aux cannelures usuelles d'un panneau (${range(r)})"
             return MatchReason(MatchCriterion.PITCH, e, f, text)
         }
@@ -399,6 +515,7 @@ object RadiatorMatcher {
         }
     }
 
+    /** Proportions sans échelle : distance logarithmique à la plage pas / hauteur de la catégorie. */
     private fun ratioReason(cat: RadiatorCategory, ratio: Double, rel: Double): MatchReason {
         val r = cat.pitchToHeightRange
         if (r == null) {
@@ -416,14 +533,15 @@ object RadiatorMatcher {
         val f = max(RATIO_FLOOR, exp(-0.5 * sq(d / s)))
         val e = effectOf(f)
         val usual = "${times(1 / r.endInclusive)} à ${times(1 / r.start)} fois"
-        val unit = if (cat.pitchRangeMm != null) "élément" else "motif"
+        val unit = if (cat.countsElements) "élément" else "motif"
         val shape = "$unit ≈ ${times(1 / ratio)} fois plus haut que large"
-        val text = when {
-            e == MatchEffect.SUPPORTS && cat.pitchRangeMm == null -> "Proportions (sans échelle) : $shape, compatible avec des cannelures de panneau (usuel $usual)"
+        var text = when {
+            e == MatchEffect.SUPPORTS && !cat.countsElements -> "Proportions (sans échelle) : $shape, compatible avec des cannelures de panneau (usuel $usual)"
             e == MatchEffect.SUPPORTS -> "Proportions (sans échelle) : $shape, compatible (usuel $usual)"
             ratio > r.endInclusive -> "Proportions (sans échelle) : $shape, ${if (e == MatchEffect.WEAKENS) "un peu" else "nettement"} plus trapu que l'usuel ($usual)"
             else -> "Proportions (sans échelle) : $shape, ${if (e == MatchEffect.WEAKENS) "un peu" else "nettement"} plus élancé que l'usuel ($usual)"
         }
+        if (cat.heightNote.isNotBlank()) text += " ; ${cat.heightNote}"
         return MatchReason(MatchCriterion.PROPORTIONS, e, f, text)
     }
 
@@ -433,14 +551,15 @@ object RadiatorMatcher {
             ?: return MatchReason(MatchCriterion.HEIGHT, MatchEffect.NEUTRAL, NEUTRAL_FACTOR, "Hauteurs non documentées pour cette catégorie")
         val (fRange, _) = interval(h.valueMm, h.uncertaintyMm, r.first.toDouble(), r.last.toDouble(), HEIGHT_MARGIN_FRACTION * h.valueMm, HEIGHT_FLOOR)
         val tol = max(2 * h.uncertaintyMm, NEAR_HEIGHT_MM)
+        val note = if (cat.heightNote.isNotBlank()) " ; ${cat.heightNote}" else ""
         if (cat.normalizedHeightsMm.isNotEmpty()) {
             val nearest = cat.normalizedHeightsMm.minBy { abs(it - h.valueMm) }
             return if (abs(nearest - h.valueMm) <= tol) {
-                MatchReason(MatchCriterion.HEIGHT, MatchEffect.SUPPORTS, 1.0, "$what : hauteur normalisée $nearest mm")
+                MatchReason(MatchCriterion.HEIGHT, MatchEffect.SUPPORTS, 1.0, "$what : hauteur normalisée $nearest mm$note")
             } else {
                 val f = minOf(fRange, NOT_NORMALIZED_FACTOR)
                 MatchReason(MatchCriterion.HEIGHT, effectOf(f), f,
-                    "$what : aucune hauteur normalisée proche (${cat.normalizedHeightsMm.joinToString(", ")} mm)")
+                    "$what : aucune hauteur normalisée proche (${cat.normalizedHeightsMm.joinToString(", ")} mm)$note")
             }
         }
         val e = effectOf(fRange)
@@ -450,7 +569,7 @@ object RadiatorMatcher {
             e == MatchEffect.SUPPORTS -> "$what dans la plage usuelle (${rangeInt(r)})"
             else -> "$what en dehors des hauteurs documentées (${rangeInt(r)}, liste non exhaustive)"
         }
-        return MatchReason(MatchCriterion.HEIGHT, e, fRange, text)
+        return MatchReason(MatchCriterion.HEIGHT, e, fRange, text + note)
     }
 
     private fun depthReason(cat: RadiatorCategory, d: DimensionEstimate, columns: Int?): MatchReason {
@@ -459,9 +578,10 @@ object RadiatorMatcher {
         val r = byColumns ?: cat.depthRangeMm
             ?: return MatchReason(MatchCriterion.DEPTH, MatchEffect.NEUTRAL, NEUTRAL_FACTOR, "Profondeur non documentée pour cette catégorie")
         var (f, side) = interval(d.valueMm, d.uncertaintyMm, r.first.toDouble(), r.last.toDouble(), DEPTH_MARGIN_MM, DEPTH_FLOOR)
-        val ref = if (byColumns != null) "pour $columns colonnes : ${rangeInt(r)}" else "usuel ${rangeInt(r)}"
+        val ref = if (byColumns != null) "pour $columns colonnes : ${rangeInt(r)}" else rangeInt(r)
         var e = effectOf(f)
-        var text = if (e == MatchEffect.SUPPORTS) "$what compatible ($ref)" else "$what ${compared(e, side, true)} à l'usuel ($ref)"
+        var text = if (e == MatchEffect.SUPPORTS) "$what compatible (${if (byColumns != null) ref else "usuel $ref"})"
+        else "$what ${compared(e, side, true)} à l'usuel ($ref)"
         if (e == MatchEffect.SUPPORTS && cat.normalizedDepthsMm.isNotEmpty()) {
             val nearest = cat.normalizedDepthsMm.minBy { abs(it - d.valueMm) }
             if (abs(nearest - d.valueMm) <= max(2 * d.uncertaintyMm, NEAR_DEPTH_MM)) {
@@ -490,11 +610,43 @@ object RadiatorMatcher {
         }
     }
 
+    /**
+     * Puissances documentées d'éléments comparables (hauteur connue). Fourchette « ordre de grandeur » sauf valeur
+     * tabulée aux cotes normalisées (hauteur ET profondeur proches d'une cote DIN) : le profil d'une fonte, propre à
+     * chaque modèle, change sa puissance à hauteur égale.
+     */
+    private fun powerHint(cat: RadiatorCategory, m: RadiatorMeasurements, columns: Int?): ElementPowerHint? {
+        val h = m.heightMm ?: return null
+        tabulatedPowers(cat, h, m.depthMm)?.let { (refs, cell) ->
+            val w = refs.first().wattsDt50
+            return ElementPowerHint(w..w, refs, false,
+                "Valeur tabulée $cell : ${num(w, 0)} W par élément à ΔT 50 K, si le radiateur est bien de ce type")
+        }
+        val refs = cat.comparableElementPowers(h.valueMm, m.depthMm?.valueMm, columns)
+        if (refs.isEmpty()) return null
+        val lo = refs.minOf { it.wattsDt50 }
+        val hi = refs.maxOf { it.wattsDt50 }
+        val values = if (hi - lo < 0.5) "${num(lo, 0)} W" else "${num(lo, 0)} à ${num(hi, 0)} W"
+        val count = if (refs.size == 1) "1 référence" else "${refs.size} références"
+        return ElementPowerHint(lo..hi, refs, true,
+            "Éléments comparables documentés : $values par élément à ΔT 50 K ($count) — ordre de grandeur, la puissance dépend du profil du modèle")
+    }
+
+    /** Puissance tabulée de la cote normalisée la plus proche (« H 580 × P 160 »), null si hors cotes ou profondeur inconnue. */
+    private fun tabulatedPowers(cat: RadiatorCategory, h: DimensionEstimate, d: DimensionEstimate?): Pair<List<ElementPowerReference>, String>? {
+        if (d == null || cat.normalizedHeightsMm.isEmpty() || cat.normalizedDepthsMm.isEmpty()) return null
+        val nh = cat.normalizedHeightsMm.minBy { abs(it - h.valueMm) }
+        val nd = cat.normalizedDepthsMm.minBy { abs(it - d.valueMm) }
+        if (abs(nh - h.valueMm) > max(2 * h.uncertaintyMm, NEAR_HEIGHT_MM) || abs(nd - d.valueMm) > max(2 * d.uncertaintyMm, NEAR_DEPTH_MM)) return null
+        val refs = cat.elementPowers.filter { it.heightMm == nh && it.depthMm == nd && it.reliability == DataReliability.DOCUMENTED && !it.derived }
+        return refs.takeIf { it.isNotEmpty() }?.let { it to "H $nh × P $nd" }
+    }
+
     // --- Outils ---
 
     private fun sanitized(m: RadiatorMeasurements): RadiatorMeasurements {
         fun clean(d: DimensionEstimate?) = d?.takeIf { it.valueMm > 0 && it.valueMm.isFinite() }?.let {
-            if (it.uncertaintyMm.isFinite() && it.uncertaintyMm >= 0) it else DimensionEstimate(it.valueMm, 0.2 * it.valueMm)
+            if (it.uncertaintyMm.isFinite() && it.uncertaintyMm >= 0) it else DimensionEstimate(it.valueMm, UNKNOWN_UNCERTAINTY_REL * it.valueMm)
         }
         return m.copy(
             pitchMm = clean(m.pitchMm), heightMm = clean(m.heightMm), lengthMm = clean(m.lengthMm), depthMm = clean(m.depthMm),
@@ -551,7 +703,7 @@ object RadiatorMatcher {
     }
 
     private fun range(r: ClosedFloatingPointRange<Double>) =
-        if (r.start == r.endInclusive) "${num(r.start, 1)} mm" else "${num(r.start, 1)}–${num(r.endInclusive, 1)} mm"
+        if (r.start == r.endInclusive) "${mmText(r.start)} mm" else "${mmText(r.start)}–${mmText(r.endInclusive)} mm"
 
     private fun rangeInt(r: IntRange) = if (r.first == r.last) "${r.first} mm" else "${r.first}–${r.last} mm"
 

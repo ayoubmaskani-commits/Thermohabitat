@@ -34,7 +34,10 @@ data class ElementCountResult(
     val periodPx: Double?,
     /** Indice de confiance 0–1 (netteté de la périodicité). */
     val confidence: Double,
-    /** Positions (px, dans la zone analysée) des limites d'éléments estimées, pour contrôle visuel. */
+    /**
+     * Positions (px, dans la zone analysée) des limites d'éléments estimées, pour contrôle visuel ; sur face redressée,
+     * bord gauche, joints et bord droit lus sur la rangée [referenceRowPx] (loi des joints [jointModel]).
+     */
     val boundariesPx: List<Double>,
     val message: String,
     /** Autres nombres plausibles (harmonique du motif, bord douteux), du plus au moins probable. */
@@ -47,8 +50,19 @@ data class ElementCountResult(
     val endPx: Double? = null,
     /** Nombre de cycles du motif sur la largeur analysée (analyse spectrale), pour contrôle. */
     val spectralCycles: Double? = null,
-    /** Nombre de joints détectés (dont interpolés). */
+    /** Nombre de joints observés (comptage sur face redressée : joints vus qui suivent la loi des joints). */
     val jointsDetected: Int = 0,
+    /** Bandes horizontales retenues pour l'analyse (px de la zone analysée), pour affichage ; vide si non applicable. */
+    val analyzedRowsPx: List<ClosedFloatingPointRange<Double>> = emptyList(),
+    /**
+     * Loi des joints (face redressée) : indice 0 au bord gauche, [count] au bord droit. Les joints peuvent être
+     * inégalement espacés et légèrement inclinés quand un coin est mal placé.
+     */
+    val jointModel: JointModel? = null,
+    /** Rangée (px) sur laquelle [boundariesPx], [startPx] et [endPx] sont donnés quand [jointModel] existe. */
+    val referenceRowPx: Double? = null,
+    /** Avertissements du comptage (coins probablement mal placés, bord masqué…). */
+    val warnings: List<String> = emptyList(),
 ) {
     val reliable: Boolean get() = count != null && confidence >= ElementCounter.RELIABLE_CONFIDENCE
 }
@@ -133,8 +147,9 @@ object ElementCounter {
     val DEFAULT_PITCH_TO_HEIGHT: ClosedFloatingPointRange<Double> get() = RectifiedCounting.DEFAULT_PITCH_TO_HEIGHT
 
     /**
-     * Comptage sur une façade REDRESSÉE (voir [PlaneRectifier.rectify]) : profils gradient + luminance, recherche
-     * spectrale fine, gestion des harmoniques par un a priori de pas, comptage des joints et examen des bords.
+     * Comptage sur une façade REDRESSÉE (voir [PlaneRectifier.rectify]), robuste aux occultations et aux coins mal
+     * placés : bandes horizontales exploitables sélectionnées, recherche spectrale fine, harmoniques départagées par un
+     * a priori de pas, loi projective des joints ajustée de façon robuste ([JointModel]) et examen des bords.
      *
      * @param face image redressée du corps du radiateur (éléments verticaux équidistants)
      * @param pitchPriorPx plage de pas plausible en px redressés (déduite de l'échelle), sinon

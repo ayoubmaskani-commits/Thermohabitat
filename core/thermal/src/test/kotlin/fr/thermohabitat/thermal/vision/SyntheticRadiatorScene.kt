@@ -17,6 +17,7 @@ import kotlin.random.Random
  * Façade : colonnes arrondies ombrées (éclairage latéral, reflet), joints sombres, moyeux haut et bas avec lignes
  * d'assemblage, faces latérales des colonnes visibles de biais, pieds, ombre portée, plinthe et sol.
  * Image : vignetage, léger flou, bruit gaussien. Coins « pointés » avec une erreur de placement uniforme.
+ * Objets posés devant (dossiers de chaises, pot, boîte, feuille, tiges) : voir [Occluder].
  *
  * Repère de la façade (mm) : x vers la droite, y vers le bas, corps du radiateur sur [0, L] × [0, H].
  */
@@ -43,6 +44,8 @@ internal class SyntheticRadiatorScene(
     val fill: Double = 0.6,
     /** Rainure au milieu de chaque colonne (0 : aucune ; 1 : aussi sombre qu'un joint) : deux motifs par élément. */
     val grooveDepth: Double = 0.0,
+    /** Objets opaques devant le radiateur (repère de la façade, mm), du premier plan vers l'arrière. */
+    val occluders: List<Occluder> = emptyList(),
 ) {
     val lengthMm: Double = elements * pitchMm
     val trueAspect: Double get() = lengthMm / heightMm
@@ -136,6 +139,7 @@ internal class SyntheticRadiatorScene(
     private fun radiance(x: Double, y: Double): Double {
         // Fenêtre à gauche : éclairage décroissant vers la droite, un peu plus sombre vers le bas.
         val light = (1.12 - 0.38 * ((x + 400) / (lengthMm + 800)).coerceIn(0.0, 1.0)) * (1 - 0.08 * (y / heightMm).coerceIn(-1.0, 2.0))
+        for (o in occluders) if (o.contains(x, y)) return light * o.shade(x, y)
         val c = cardAtMm
         if (c != null && x >= c.x && x <= c.x + CARD_W && y >= c.y && y <= c.y + CARD_H) {
             val chip = x - c.x in 8.0..20.0 && y - c.y in 18.0..28.0
@@ -221,8 +225,45 @@ internal class SyntheticRadiatorScene(
     private fun dot(a: DoubleArray, b: DoubleArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     private fun unit(a: DoubleArray): DoubleArray { val n = sqrt(dot(a, a)); return doubleArrayOf(a[0] / n, a[1] / n, a[2] / n) }
 
+    /** Objet opaque posé devant la façade : zone (mm) et luminance propre (avant éclairage). */
+    class Occluder(val contains: (Double, Double) -> Boolean, val shade: (Double, Double) -> Double)
+
     companion object {
         const val CARD_W = 85.60
         const val CARD_H = 53.98
+
+        /** Dossier de chaise : forme arrondie (superellipse) claire, ombrée, tissu légèrement texturé, couture en biais. */
+        fun chairBack(cx: Double, cy: Double, rx: Double, ry: Double, lum: Double = 185.0) = Occluder(
+            contains = { x, y -> Math.pow(abs(x - cx) / rx, 3.0) + Math.pow(abs(y - cy) / ry, 3.0) <= 1 },
+            shade = { x, y ->
+                val u = (x - cx) / rx; val v = (y - cy) / ry
+                val seam = if (abs(u + 0.55 - 0.3 * v) < 0.015) 0.6 else 1.0
+                lum * (0.92 - 0.12 * u - 0.05 * v) * seam * (1 + 0.03 * sin(x * 0.9) * sin(y * 0.7))
+            },
+        )
+
+        /** Objet rectangulaire : uni (pot, boîte unie) ou imprimé (pavés de luminances variées). */
+        fun box(x0: Double, y0: Double, x1: Double, y1: Double, lum: Double, printed: Boolean = false) = Occluder(
+            contains = { x, y -> x in x0..x1 && y in y0..y1 },
+            shade = { x, y ->
+                if (!printed) lum * (1 - 0.1 * (x - x0) / (x1 - x0)) else {
+                    val i = floor((x - x0) / 23).toInt(); val j = floor((y - y0) / 17).toInt()
+                    val h = ((i * 73_856_093) xor (j * 19_349_663)).toLong().and(0xFFFF) / 65_535.0
+                    lum * (0.45 + 0.55 * h)
+                }
+            },
+        )
+
+        /** Feuille sombre (ellipse). */
+        fun leaf(cx: Double, cy: Double, rx: Double, ry: Double, lum: Double = 45.0) = Occluder(
+            contains = { x, y -> ((x - cx) / rx).let { it * it } + ((y - cy) / ry).let { it * it } <= 1 },
+            shade = { _, _ -> lum },
+        )
+
+        /** Tige de plante sombre, presque verticale (faux joint), de [y0] à [y1], inclinée de [lean] mm par mm. */
+        fun stem(x: Double, y0: Double, y1: Double, width: Double, lean: Double = 0.03, lum: Double = 40.0) = Occluder(
+            contains = { px, py -> py in y0..y1 && abs(px - (x + lean * (py - y0))) <= width / 2 },
+            shade = { _, _ -> lum },
+        )
     }
 }

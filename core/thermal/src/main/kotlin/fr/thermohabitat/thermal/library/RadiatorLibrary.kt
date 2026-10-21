@@ -1,10 +1,19 @@
 package fr.thermohabitat.thermal.library
 
+import fr.thermohabitat.thermal.fr
 import fr.thermohabitat.thermal.model.PanelType
 import fr.thermohabitat.thermal.model.RadiatorEra
 import fr.thermohabitat.thermal.model.RadiatorType
 import fr.thermohabitat.thermal.vision.DimensionEstimate
 import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/** Millimètres à la française : entier si la valeur l'est (à 0,05 près), sinon une décimale. */
+internal fun mmText(v: Double): String = if (abs(v - v.roundToInt()) < 0.05) v.roundToInt().toString() else v.fr(1)
+
+/** « 55 à 66 mm », ou « 60 mm » pour une valeur unique. */
+internal fun rangeMmText(r: ClosedFloatingPointRange<Double>): String =
+    if (r.start == r.endInclusive) "${mmText(r.start)} mm" else "${mmText(r.start)} à ${mmText(r.endInclusive)} mm"
 
 /** Motif de la façade vu de face, tel qu'on le voit sur une photo. */
 enum class FrontPattern(val label: String) {
@@ -60,6 +69,7 @@ data class ElementPowerReference(
  * @property frontPatterns motifs possibles vus de face
  * @property elementPowers puissances d'éléments documentées (ordre de grandeur de comparaison)
  * @property pitchNote précision affichée quand un pas mesuré sort de [pitchRangeMm]
+ * @property heightNote réserve sur les hauteurs (valeurs extrapolées, liste non exhaustive), rappelée avec la hauteur
  */
 data class RadiatorCategory(
     val code: String,
@@ -84,6 +94,7 @@ data class RadiatorCategory(
     val frontPatterns: Set<FrontPattern> = emptySet(),
     val elementPowers: List<ElementPowerReference> = emptyList(),
     val pitchNote: String = "",
+    val heightNote: String = "",
     /** Période de fabrication et de pose. */
     val epoch: String = "",
     val reliability: DataReliability = DataReliability.ORDER_OF_MAGNITUDE,
@@ -94,6 +105,31 @@ data class RadiatorCategory(
 ) {
     /** Pas du motif vertical vu de face : éléments, sinon cannelures. */
     val patternPitchRangeMm: ClosedFloatingPointRange<Double>? get() = pitchRangeMm ?: flutePitchRangeMm
+
+    /**
+     * Vrai si une période du motif vu de face est un élément : le nombre compté sur la photo est alors un nombre
+     * d'éléments. Faux pour les cannelures d'un panneau (le compte n'a pas de sens pour la puissance).
+     */
+    val countsElements: Boolean get() = pitchRangeMm != null
+
+    /** Pas affiché dans la bibliothèque (« Pas d'élément 55 à 66 mm »), cannelures signalées ; null si sans objet. */
+    val pitchText: String?
+        get() = when {
+            pitchRangeMm != null -> "Pas d'élément ${rangeMmText(pitchRangeMm)}"
+            flutePitchRangeMm != null -> "Cannelures au pas de ${rangeMmText(flutePitchRangeMm)} (ce ne sont pas des éléments)"
+            else -> null
+        }
+
+    /** Hauteurs affichées dans la bibliothèque (normalisées, sinon plage usuelle), réserve comprise ; null si inconnues. */
+    val heightText: String?
+        get() {
+            val base = when {
+                normalizedHeightsMm.isNotEmpty() -> "Hauteurs normalisées ${normalizedHeightsMm.joinToString(", ")} mm"
+                heightRangeMm != null -> "Hauteurs usuelles ${rangeMmText(heightRangeMm.first.toDouble()..heightRangeMm.last.toDouble())}"
+                else -> return null
+            }
+            return if (heightNote.isBlank()) base else "$base ; $heightNote"
+        }
 
     /** Rapport pas / hauteur possible (pas mini / hauteur maxi … pas maxi / hauteur mini), null si non documenté. */
     val pitchToHeightRange: ClosedFloatingPointRange<Double>?
@@ -340,7 +376,8 @@ object RadiatorLibrary {
             epoch = "Europe (surtout Allemagne, Benelux) 1950–1980 ; toujours fabriqué",
             reliability = DataReliability.DOCUMENTED,
             remarks = "Hauteur hors tout = entraxe des moyeux + 80 mm. Puissances à 75/65/20 °C (DIN 4703 / EN 442, fiches techniques). " +
-                "La correspondance profondeur → nombre de colonnes dépend du fabricant.",
+                "Livré en blocs : 20 éléments au plus (H 280 à 680), 15 (H 980). La correspondance profondeur → nombre de colonnes " +
+                "dépend du fabricant.",
             sources = listOf(
                 HG_TEC_FONTE, "https://www.gussradiatoren.info/downloads/guradiatoren-technische-daten.pdf",
                 "https://www.gussradiatoren.info/technik/technische-beschreibung/index.html", WATT42,
@@ -441,7 +478,8 @@ object RadiatorLibrary {
             description = "Façade en tôle d'acier plissée en plis verticaux serrés (≈ 3 cm), vendue au nombre d'éléments (type « Lamella »).",
             visualCues = listOf("Façade en tôle plissée : plis verticaux serrés (≈ 3 cm)", "Vendu au nombre d'éléments (6 à 70)", "Faible profondeur (6,5 / 9,5 / 12 cm)"),
             measureTips = sectionalTips,
-            pitchRangeMm = 30.6..31.0, heightRangeMm = 250..1000, normalizedDepthsMm = listOf(65, 95, 120), frontPatterns = vertical,
+            pitchRangeMm = 30.6..31.0, heightRangeMm = 250..1000, heightNote = "plage relevée, sans hauteurs fixes documentées",
+            normalizedDepthsMm = listOf(65, 95, 120), frontPatterns = vertical,
             epoch = "Années 1960 à nos jours",
             reliability = DataReliability.ORDER_OF_MAGNITUDE,
             remarks = "Pas déduit d'exemples d'utilisateurs (550 mm pour 18 éléments ≈ 30,6 ; 310 mm pour 10 ≈ 31,0), non publié par le " +
@@ -525,7 +563,8 @@ object RadiatorLibrary {
             description = "Éléments en aluminium injecté à façade plate et ailettes latérales. Léger et réactif.",
             visualCues = listOf("Façade plate par élément avec fente centrale ou ailettes", "Ailettes verticales visibles de côté", "Pas d'élément 8 cm", "Léger, réactif"),
             measureTips = sectionalTips,
-            pitchRangeMm = 80.0..80.0, typicalHeightsMm = listOf(432, 582, 682, 782, 882), frontPatterns = vertical,
+            pitchRangeMm = 80.0..80.0, typicalHeightsMm = listOf(432, 582, 682, 782, 882),
+            heightNote = "hauteurs extrapolées (entraxe + 82 mm) d'après un seul modèle documenté", frontPatterns = vertical,
             elementPowers = listOf(calidor(350, 89.9), calidor(500, 123.8), calidor(600, 143.6), calidor(700, 161.3), calidor(800, 177.7)),
             epoch = "Années 1980 à nos jours",
             reliability = DataReliability.DOCUMENTED,
@@ -545,7 +584,8 @@ object RadiatorLibrary {
                 "Groupes de barreaux séparés par des espaces pour serviettes",
             ),
             measureTips = listOf("Mesurez la largeur et la hauteur hors tout."),
-            typicalHeightsMm = listOf(450, 1000, 1146), frontPatterns = setOf(FrontPattern.HORIZONTAL_BARS),
+            typicalHeightsMm = listOf(450, 1000, 1146), heightNote = "hauteurs relevées sur quelques modèles",
+            frontPatterns = setOf(FrontPattern.HORIZONTAL_BARS),
             epoch = "Années 1990 à nos jours",
             reliability = DataReliability.ORDER_OF_MAGNITUDE,
             remarks = "Espacement des barreaux non normalisé. Hauteurs et profondeurs relevées sur quelques modèles (liste non exhaustive).",

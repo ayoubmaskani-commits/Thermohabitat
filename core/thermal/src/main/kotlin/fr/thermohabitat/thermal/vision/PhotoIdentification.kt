@@ -64,21 +64,68 @@ data class PhotoIdentification(
     /** Échelle retenue (null sans référence) : sert à recalculer les dimensions pour un autre nombre. */
     val scale: PhotoScale?,
 ) {
-    /** Limites proposées (px de la face) : bord gauche, joints, bord droit. */
+    /**
+     * Limites proposées (px de la face) : bord gauche, joints, bord droit, lues sur la rangée [boundariesRowFacePx].
+     * Elles suivent la loi des joints : pas forcément équidistantes si un coin est mal placé.
+     */
     val boundariesFacePx: List<Double> get() = counting.boundariesPx
+
+    /** Rangée de la face (px) sur laquelle [boundariesFacePx] sont lues (milieu du contour). */
+    val boundariesRowFacePx: Double get() = counting.referenceRowPx ?: (faceHeight / 2.0)
+
+    /** Loi des joints dans la face (indice 0 au bord gauche, [count] au bord droit), null sans comptage. */
+    val jointModel: JointModel? get() = counting.jointModel
+
+    /** Bandes de la face (px) retenues pour l'analyse, pour affichage (zones masquées exclues). */
+    val analyzedRowsFacePx: List<ClosedFloatingPointRange<Double>> get() = counting.analyzedRowsPx
 
     /** Bords du radiateur retenus dans la face (détectés, sinon ceux du contour). */
     val extentFacePx: ClosedFloatingPointRange<Double>
         get() = (counting.startPx ?: 0.0)..(counting.endPx ?: faceWidth.toDouble())
 
-    /** Limites régulières pour un nombre choisi par l'utilisateur (boutons − / +). */
-    fun boundariesFor(count: Int): List<Double> =
-        ElementCounter.evenBoundaries(count, extentFacePx.start, extentFacePx.endInclusive)
+    /**
+     * Limites pour un nombre choisi par l'utilisateur (boutons − / +), entre les bords retenus : indices de la loi des
+     * joints répartis régulièrement (la perspective résiduelle est conservée), sinon limites équidistantes. Pour le
+     * nombre proposé, ce sont exactement [boundariesFacePx].
+     */
+    fun boundariesFor(count: Int): List<Double> {
+        require(count >= 1) { "Nombre d'éléments invalide" }
+        val n = this.count
+        if (n != null && count == n && boundariesFacePx.size == n + 1) return boundariesFacePx
+        val start = extentFacePx.start; val end = extentFacePx.endInclusive
+        val m = jointModel ?: return ElementCounter.evenBoundaries(count, start, end)
+        val y = boundariesRowFacePx
+        val k0 = m.indexAt(start, y); val k1 = m.indexAt(end, y)
+        if (!k0.isFinite() || !k1.isFinite() || k1 <= k0) return ElementCounter.evenBoundaries(count, start, end)
+        return List(count + 1) { i ->
+            when (i) {
+                0 -> start
+                count -> end
+                else -> m.positionAt(k0 + (k1 - k0) * i / count, y)
+            }
+        }
+    }
 
-    /** Segments (haut, bas) dans la photo des limites verticales données en px de la face, sur la hauteur du corps. */
-    fun boundaryLinesInImage(boundaries: List<Double> = boundariesFacePx): List<Pair<ImagePoint, ImagePoint>> {
+    /**
+     * Segments (haut, bas) dans la photo des limites données en px de la face (rangée [boundariesRowFacePx]), sur la
+     * hauteur du corps ; avec la loi des joints, chaque segment suit le joint (éventuellement incliné dans la face).
+     */
+    fun boundaryLinesInImage(boundaries: List<Double> = boundariesFacePx): List<Pair<ImagePoint, ImagePoint>> =
+        boundaryLinesInFace(boundaries).map { (top, bottom) -> faceToImage.map(top) to faceToImage.map(bottom) }
+
+    /** Segments (haut, bas) des limites dans la face (px), sur la hauteur du corps, pour l'aperçu redressé. */
+    fun boundaryLinesInFace(boundaries: List<Double> = boundariesFacePx): List<Pair<ImagePoint, ImagePoint>> {
         val rows = bodyRowsFacePx ?: 0.0..faceHeight.toDouble()
-        return boundaries.map { x -> faceToImage.map(x, rows.start) to faceToImage.map(x, rows.endInclusive) }
+        val m = jointModel
+        val y = boundariesRowFacePx
+        return boundaries.map { x ->
+            val k = m?.indexAt(x, y)
+            if (m == null || k == null || !k.isFinite()) {
+                ImagePoint(x, rows.start) to ImagePoint(x, rows.endInclusive)
+            } else {
+                ImagePoint(m.positionAt(k, rows.start), rows.start) to ImagePoint(m.positionAt(k, rows.endInclusive), rows.endInclusive)
+            }
+        }
     }
 
     /** Dimensions pour un nombre d'éléments choisi (le pas change, la longueur aussi avec un pas standard). */
@@ -144,9 +191,10 @@ object PhotoIdentifier {
     private const val SEED = 7_331
 
     /**
-     * Étapes : rapport d'aspect du contour (Zhang & He) → face redressée (≤ 1200 px, avec marges) → comptage
-     * (spectre, harmoniques, joints, bords réels, haut et bas du corps) → échelle et incertitudes (perturbation
-     * déterministe de ±[POINTING_ERROR_PX] px par point). Quelques dizaines de millisecondes sur JVM de bureau.
+     * Étapes : rapport d'aspect du contour (Zhang & He) → face redressée (≤ 1200 px, avec marges) → comptage (bandes
+     * exploitables malgré les objets posés devant, pas commun et harmoniques, loi projective des joints ajustée de façon
+     * robuste, bords, haut et bas du corps) → échelle et incertitudes (perturbation déterministe de ±[POINTING_ERROR_PX]
+     * px par point). Quelques centaines de millisecondes sur JVM de bureau.
      *
      * @param image photo en niveaux de gris (px de la photo d'origine)
      * @param radiatorCorners 4 coins du corps du radiateur (sans pieds), ordre quelconque, px de [image]
@@ -210,7 +258,7 @@ object PhotoIdentifier {
         val prior = preScale?.let { (PLAUSIBLE_PITCH_MM.start / it)..(PLAUSIBLE_PITCH_MM.endInclusive / it) }
         val counting = ElementCounter.countRectified(face, prior, minElements, maxElements, excluded,
             contour = margin.toDouble()..(margin + size.width).toDouble(),
-            contourRows = marginY.toDouble()..(marginY + size.height).toDouble()).shifted(-margin.toDouble())
+            contourRows = marginY.toDouble()..(marginY + size.height).toDouble()).shifted(-margin.toDouble(), -marginY.toDouble())
         val count = counting.count
         // Haut et bas réels du corps (coins pointés un peu trop haut ou trop bas) entre les bords retenus.
         val cols = if (count != null && counting.startPx != null && counting.endPx != null) {
@@ -266,6 +314,7 @@ object PhotoIdentifier {
                 "± ${(100 * aspect.relativeUncertainty).roundToInt()} % (focale ${aspect.focalSource.label})."
         }
         messages += counting.message
+        warnings += counting.warnings
         if (count == null) messages += "Nombre d'éléments non déterminé : comptez-les sur l'aperçu redressé (boutons − / +)."
         when (reference) {
             null -> warnings += "Sans référence d'échelle, aucune dimension n'est mesurée : seul le nombre d'éléments est proposé. " +
@@ -441,11 +490,14 @@ object PhotoIdentifier {
 
     // --- Outils ---
 
-    /** Résultat de comptage exprimé dans le repère de la face nominale (décalage des abscisses). */
-    private fun ElementCountResult.shifted(dx: Double) = copy(
+    /** Résultat de comptage exprimé dans le repère de la face nominale (translation de (dx, dy)). */
+    private fun ElementCountResult.shifted(dx: Double, dy: Double) = copy(
         boundariesPx = boundariesPx.map { it + dx },
         startPx = startPx?.plus(dx),
         endPx = endPx?.plus(dx),
+        analyzedRowsPx = analyzedRowsPx.map { (it.start + dy)..(it.endInclusive + dy) },
+        jointModel = jointModel?.shifted(dx, dy),
+        referenceRowPx = referenceRowPx?.plus(dy),
     )
 
     private fun jitter(p: ImagePoint, rnd: Random) = ImagePoint(
