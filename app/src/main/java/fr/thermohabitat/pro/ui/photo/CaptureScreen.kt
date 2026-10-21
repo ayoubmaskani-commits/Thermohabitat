@@ -367,7 +367,7 @@ fun CaptureGuideDialog(onDismiss: () -> Unit) {
                         "mesurée au mètre (hauteur ou longueur).",
                     "3. Vue de dessus ou de côté : elle permet de compter les colonnes et d'estimer la profondeur.",
                     "4. Plaque constructeur ou marquage : gros plan net, sans reflet ni flash direct.",
-                    "5. Évitez le contre-jour ; un éclairage homogène améliore le comptage automatique des éléments.",
+                    "5. Évitez le contre-jour ; un éclairage homogène rend les joints entre éléments plus faciles à repérer.",
                     "Les photographies restent dans le stockage privé de l'application et ne sont jamais envoyées sur Internet.",
                 ).forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
             }

@@ -52,7 +52,7 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
                 ChoiceChips(ThemeMode.entries, prefs.themeMode, { it.label }, { vm.setTheme(it) })
                 SwitchRow("Couleurs dynamiques (Android 12+)", prefs.dynamicColor, { vm.setDynamic(it) }, description = "Utilise les couleurs du fond d'écran")
             }
-            SectionCard("Reconnaissance des radiateurs", icon = Icons.Filled.AutoAwesome) {
+            SectionCard("Identification des radiateurs", icon = Icons.Filled.AutoAwesome) {
                 ValueRow("Modèle d'IA embarqué", if (vm.aiAvailable) "Installé" else "Non installé")
                 Text(
                     if (vm.aiAvailable) "Les propositions du modèle sont affichées avec leur indice de confiance et doivent être validées."

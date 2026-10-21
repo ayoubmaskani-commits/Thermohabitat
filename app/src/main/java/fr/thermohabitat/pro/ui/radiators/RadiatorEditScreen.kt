@@ -462,8 +462,9 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
 
             // --- Dimensions ---
             SectionCard("Dimensions", icon = Icons.Filled.Straighten,
-                subtitle = "Aucune dimension n'est déduite d'une photo sans échelle. Mesurez au mètre, ou utilisez « Identifier sur la photo » avec " +
-                    "une carte bancaire, une feuille A4 ou une dimension mesurée.") {
+                // Sans échelle, la photo ne donne au mieux qu'une estimation (pas standard supposé) : dit explicitement.
+                subtitle = "Mesurez au mètre, ou utilisez « Identifier sur la photo » avec une échelle (carte bancaire, feuille A4, " +
+                    "dimension mesurée). Sans échelle, une photo ne donne au mieux qu'une estimation.") {
                 // Côte à côte seulement s'il y a la place ; sinon empilés (petit écran, police agrandie).
                 FieldRow {
                     NumberField("Hauteur", r.heightMm, { v -> vm.update { it.copy(heightMm = v) } }, unit = "mm", decimals = 0, min = 50.0, max = 3000.0)

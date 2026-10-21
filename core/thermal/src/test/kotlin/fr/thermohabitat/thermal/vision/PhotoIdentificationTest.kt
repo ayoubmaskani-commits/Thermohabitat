@@ -184,6 +184,11 @@ class PhotoIdentificationTest {
         assertThat(uniform.count).isNull()
         assertThat(uniform.lengthMm).isNull()
         assertThat(uniform.dimensionsOrigin).isEqualTo(ValueOrigin.UNKNOWN)
+        // Nombre saisi à la main avec le pas standard : dimensions estimées malgré l'absence de comptage automatique.
+        val manual = uniform.dimensionsFor(13)
+        assertThat(manual.origin).isEqualTo(ValueOrigin.ESTIMATED)
+        assertThat(manual.lengthMm!!.valueMm).isWithin(1e-6).of(13 * 60.0)
+        assertThat(manual.heightMm).isNotNull()
         for (seed in 1..5) {
             val rnd = Random(seed)
             val noise = GrayImage(1200, 900, FloatArray(1200 * 900) { (128 + rnd.nextDouble(-50.0, 50.0)).toFloat() })

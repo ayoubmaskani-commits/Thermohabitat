@@ -2,7 +2,6 @@ package fr.thermohabitat.pro.ui.photo
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -53,6 +53,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -442,7 +448,8 @@ class PhotoIdentifyViewModel @Inject constructor(
     fun contourIssue(): String? {
         val ws = workspace.value ?: return null
         val q = Homography.orderCorners(ws.radiator.imagePoints)
-        return if (Homography.isConvex(q)) null else "Contour invalide : les 4 coins doivent former un quadrilatère (coins croisés ou alignés)."
+        return if (Homography.isConvex(q)) null
+        else "Contour invalide : placez les 4 coins aux 4 angles du radiateur (pas 3 coins alignés ni un coin rentrant)."
     }
 
     /** Entrées de l'analyse d'après l'écran ; échec avec un message en français si une donnée manque. */
@@ -583,11 +590,15 @@ fun PhotoIdentifyScreen(nav: NavController, vm: PhotoIdentifyViewModel = hiltVie
             val boundaries = remember(a, n) { if (a != null && n != null) a.identification.boundariesFor(n) else null }
             val photoLines = remember(a, boundaries) { boundaries?.let { a?.identification?.boundaryLinesInImage(it) } }
 
-            InfoBanner("Placez les 4 coins du corps du radiateur (sans pieds). La photo peut être prise de biais. Un coin caché " +
-                "(meuble, rideau) peut être placé approximativement : l'analyse le corrige à partir des joints.")
+            // Parcours en 3 étapes : contour, échelle, analyse puis vérification.
+            StepTitle("1. Contour du radiateur")
+            InfoBanner("Faites glisser les 4 ronds orange sur les angles du corps du radiateur, sans les pieds ni les tuyaux. " +
+                "Une photo un peu de biais convient : la façade est redressée par calcul.")
             val image = remember(ws.bitmap) { ws.bitmap.asImageBitmap() }
             val accent = CONTOUR_COLOR
-            ImageWorkArea(ws.bitmap, onDragStart = onDragStart, onDrag = onDrag, onDragEnd = onDragEnd) { frame ->
+            val showsReference = vm.mode == ScaleMode.OBJECT || vm.mode == ScaleMode.KNOWN_LENGTH
+            ImageWorkArea(ws.bitmap, modifier = Modifier.semantics { contentDescription = "Photo du radiateur, coins du contour à placer au doigt" },
+                onDragStart = onDragStart, onDrag = onDrag, onDragEnd = onDragEnd) { frame ->
                 val radiatorPts = ws.radiator.points
                 val refShape: List<Offset>? = when (vm.mode) {
                     ScaleMode.OBJECT -> ws.referenceObject.points
@@ -605,16 +616,31 @@ fun PhotoIdentifyScreen(nav: NavController, vm: PhotoIdentifyViewModel = hiltVie
                     }
                 }
             }
-            Text("Contour du radiateur : orange ; référence d'échelle : cyan ; limites d'éléments : jaune. Une loupe s'affiche " +
-                "pendant le glissé.",
+            // Légende limitée aux tracés visibles.
+            val legend = listOfNotNull(
+                "contour du radiateur en orange",
+                "référence d'échelle en cyan".takeIf { showsReference },
+                "limites d'éléments en jaune".takeIf { photoLines != null && !stale },
+            ).joinToString(" ; ")
+            Text("Repères : $legend. Une loupe agrandit la zone pendant le glissé.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             contourIssue?.let { InfoBanner(it, kind = BannerKind.WARNING) }
             OutlinedButton(onClick = { vm.resetHandles() }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Réinitialiser les coins")
             }
+            // Radiateur en partie caché : consignes simples (le comptage s'appuie sur la régularité des joints visibles).
+            Text("Radiateur en partie caché", style = MaterialTheme.typography.labelLarge)
+            Text("• Chaise ou objet devant : placez quand même les coins sur tout le radiateur. Les zones masquées sont écartées " +
+                "et les joints cachés déduits de l'écart régulier des joints visibles.", style = MaterialTheme.typography.bodySmall)
+            Text("• Coin caché : placez-le là où il devrait être, dans le prolongement des bords visibles. Le comptage tolère un " +
+                "coin approximatif grâce aux joints ; les dimensions, elles, en dépendent.", style = MaterialTheme.typography.bodySmall)
 
             ScaleSection(vm)
 
+            StepTitle("3. Analyse et vérification")
+            Text("Calcul géométrique sur le téléphone, sans modèle d'IA : redressement de la façade, repérage des joints entre " +
+                "éléments, puis comparaison avec la base. Vérifiez chaque proposition sur l'aperçu avant de la reporter.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Button(enabled = !analyzing, onClick = { vm.analyze() }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
                 if (analyzing) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
@@ -622,7 +648,8 @@ fun PhotoIdentifyScreen(nav: NavController, vm: PhotoIdentifyViewModel = hiltVie
                 }
                 Text(when { analyzing -> "Analyse en cours…"; a == null -> "Analyser"; else -> "Relancer l'analyse" })
             }
-            error?.let { InfoBanner(it, kind = BannerKind.WARNING) }
+            // Erreur annoncée par les lecteurs d'écran dès son affichage.
+            error?.let { InfoBanner(it, Modifier.semantics { liveRegion = LiveRegionMode.Polite }, kind = BannerKind.WARNING) }
             if (a != null) {
                 if (stale) InfoBanner("Contour ou échelle modifiés depuis l'analyse : relancez-la pour mettre le résultat à jour.", kind = BannerKind.WARNING)
                 IdentifyResult(vm, a, radiator, boundaries, stale, Modifier.bringIntoViewRequester(resultBring),
@@ -635,14 +662,14 @@ fun PhotoIdentifyScreen(nav: NavController, vm: PhotoIdentifyViewModel = hiltVie
 /** Choix de la référence d'échelle et saisies associées. */
 @Composable
 private fun ScaleSection(vm: PhotoIdentifyViewModel) {
-    SectionCard("Échelle", subtitle = "Elle permet de mesurer le pas des éléments, la hauteur et la longueur.") {
+    SectionCard("2. Échelle", subtitle = "Facultative pour compter ; nécessaire pour mesurer le pas, la hauteur et la longueur.") {
         ChoiceChips(ScaleMode.entries, vm.mode, { it.label }, { vm.mode = it })
         Text(vm.mode.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         when (vm.mode) {
             ScaleMode.OBJECT -> {
                 DropdownField("Objet de référence", PLANAR_OBJECTS, vm.planarObject,
                     { "${it.label} (${mmText(it.longMm)} × ${mmText(it.shortMm)} mm)" }, { vm.planarObject = it })
-                Text("Faites glisser les 4 coins cyan sur les coins de l'objet (touchez son centre pour le déplacer en entier). " +
+                Text("Faites glisser les 4 coins cyan sur les angles de l'objet (glissez depuis son centre pour le déplacer en entier). " +
                     "Il doit être à plat contre la façade du radiateur, pas sur le mur derrière.", style = MaterialTheme.typography.bodySmall)
             }
             ScaleMode.KNOWN_LENGTH -> {
@@ -698,7 +725,9 @@ private fun IdentifyResult(
     SectionCard("Nombre d'éléments", modifier) {
         a.preview?.let { preview ->
             Text("Aperçu redressé", style = MaterialTheme.typography.labelLarge)
-            ImageWorkArea(preview.bitmap) { frame -> drawFaceOverlay(frame, preview, id, if (stale) null else boundaries) }
+            ImageWorkArea(preview.bitmap, modifier = Modifier.semantics { contentDescription = "Aperçu redressé de la façade avec les limites d'éléments" }) { frame ->
+                drawFaceOverlay(frame, preview, id, if (stale) null else boundaries)
+            }
             Text("Traits jaunes : limites d'éléments, à faire coïncider avec les joints (boutons − / +). Bandes bleues : rangées " +
                 "analysées ; les zones masquées par un objet sont écartées.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -716,7 +745,8 @@ private fun IdentifyResult(
         if (candidates.size > 1) {
             Text("Nombres possibles", style = MaterialTheme.typography.labelLarge)
             ChoiceChips(candidates, n, { c -> if (c == id.count) "$c (proposé)" else "$c" }, { vm.count = it })
-            id.alternatives.forEach { alt -> Text("${alt.count} : ${alt.reason}", style = MaterialTheme.typography.bodySmall) }
+            // La raison cite déjà le nombre alternatif.
+            id.alternatives.forEach { alt -> Text("• ${alt.reason}", style = MaterialTheme.typography.bodySmall) }
         }
         if (proposal.counts.size > 1) {
             Text("Comparaison avec la base", style = MaterialTheme.typography.labelLarge)
@@ -730,6 +760,8 @@ private fun IdentifyResult(
     // Avertissements d'échelle et de prise de vue (ceux du comptage sont dans la carte précédente).
     val scaleWarnings = id.warnings.filter { it !in id.counting.warnings }
     SectionCard("Dimensions", subtitle = "Valeurs à ± 1 écart-type, pour le nombre retenu.") {
+        // Origine de l'échelle : mesure (référence métrique) ou estimation (pas standard supposé).
+        ValueRow("Échelle utilisée", scaleSourceText(a.input.reference))
         if (dims.origin == ValueOrigin.UNKNOWN) {
             if (scaleWarnings.isEmpty()) {
                 Text("Aucune échelle : le pas, la hauteur et la longueur ne sont pas mesurés. Choisissez une référence ci-dessus puis " +
@@ -745,7 +777,7 @@ private fun IdentifyResult(
         val slender = if (n != null && id.bodyAspectRatio > 0 && id.bodyAspectRatio.isFinite()) n / id.bodyAspectRatio else null
         slender?.let {
             ValueRow("Proportions d'un élément", "≈ ${Fmt.num(it, if (it < 10) 1 else 0)} fois plus haut que large" +
-                if (id.aspectMeasured) "" else " (estimé)")
+                if (id.aspectMeasured) "" else " (estimation)")
         }
         ValueRow("Prise de vue", if (id.aspect.frontal) "Quasi de face" else "≈ ${id.aspect.viewAngleDeg.roundToInt()}° de biais")
         ValueRow("Indice de confiance de l'analyse", Fmt.pct(id.confidence))
@@ -841,6 +873,21 @@ private fun TypeSection(vm: PhotoIdentifyViewModel, proposal: IdentifyProposal) 
     }
 }
 
+/** Référence d'échelle de l'analyse et nature des dimensions qui en découlent. */
+private fun scaleSourceText(r: ScaleReference?): String = when (r) {
+    null -> "Aucune (dimensions non mesurées)"
+    is ScaleReference.PlanarObject -> "${r.obj.label} : mesure"
+    is ScaleReference.KnownLength -> "${r.label}, ${mmText(r.lengthMm)} mm : mesure"
+    is ScaleReference.MeasuredDimension -> "${r.dimension.label} relevée au mètre, ${mmText(r.valueMm)} mm"
+    is ScaleReference.StandardPitch -> "Pas standard supposé de ${mmText(r.pitchMm)} mm : estimation"
+}
+
+/** Titre d'étape du parcours, annoncé comme titre par les lecteurs d'écran. */
+@Composable
+private fun StepTitle(text: String) {
+    Text(text, Modifier.semantics { heading() }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+}
+
 /** Verdict et toutes les raisons du rapprochement (catégorie retenue). */
 private fun reasonsText(m: CategoryMatch): String =
     (listOf(m.level.label) + m.reasons.map { "• ${it.text}" }).joinToString("\n")
@@ -848,7 +895,8 @@ private fun reasonsText(m: CategoryMatch): String =
 @Composable
 private fun CategoryOption(title: String, detail: String?, selected: Boolean, onClick: () -> Unit) {
     Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        // Choix exclusif : rôle « bouton radio » pour les lecteurs d'écran, cible d'au moins 48 dp.
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = if (selected) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else CardDefaults.cardColors(),
     ) {

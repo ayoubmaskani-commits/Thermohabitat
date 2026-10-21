@@ -289,17 +289,20 @@ object PhotoIdentifier {
                 heightFrac, heightDetRel, warnings)
             is ScaleReference.MeasuredDimension -> measuredScale(reference, ratioUsed, aspect.relativeUncertainty, extentFrac / heightFrac,
                 sqrt(sq(extentRel) + sq(heightDetRel)))
-            is ScaleReference.StandardPitch -> if (count != null && pitchFrac != null) {
-                PhotoScale(
-                    lengthMm = null, lengthRel = 0.0, heightMm = null, heightRel = aspect.relativeUncertainty,
-                    origin = ValueOrigin.ESTIMATED,
-                    standardPitch = Triple(reference.pitchMm, reference.uncertaintyMm / reference.pitchMm, heightFrac * size.height),
-                    extentPx = extentFrac * size.width,
-                )
-            } else null
+            // Indépendant du comptage : un nombre saisi à la main (motif non exploitable) donne aussi des dimensions estimées.
+            is ScaleReference.StandardPitch -> PhotoScale(
+                lengthMm = null, lengthRel = 0.0, heightMm = null, heightRel = aspect.relativeUncertainty,
+                origin = ValueOrigin.ESTIMATED,
+                standardPitch = Triple(reference.pitchMm, reference.uncertaintyMm / reference.pitchMm, heightFrac * size.height),
+                extentPx = extentFrac * size.width,
+            )
         }
-        val dims = if (count != null && scale != null) scale.dimensions(count)
-        else scale?.dimensions(1)?.let { it.copy(pitchMm = null) } ?: PhotoDimensions(null, null, null, ValueOrigin.UNKNOWN)
+        val dims = when {
+            count != null && scale != null -> scale.dimensions(count)
+            // Pas standard : les dimensions dépendent du nombre ; sans nombre proposé, elles viendront du nombre saisi.
+            scale != null && reference !is ScaleReference.StandardPitch -> scale.dimensions(1).copy(pitchMm = null)
+            else -> PhotoDimensions(null, null, null, ValueOrigin.UNKNOWN)
+        }
 
         // Messages.
         val bodyAspect = if (planar != null && dims.lengthMm != null && dims.heightMm != null) {
