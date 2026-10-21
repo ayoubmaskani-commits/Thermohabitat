@@ -41,6 +41,8 @@ internal class SyntheticRadiatorScene(
     val cornerError: Double = 0.015,
     /** Encombrement du radiateur dans l'image vue de face. */
     val fill: Double = 0.6,
+    /** Rainure au milieu de chaque colonne (0 : aucune ; 1 : aussi sombre qu'un joint) : deux motifs par élément. */
+    val grooveDepth: Double = 0.0,
 ) {
     val lengthMm: Double = elements * pitchMm
     val trueAspect: Double get() = lengthMm / heightMm
@@ -169,7 +171,8 @@ internal class SyntheticRadiatorScene(
             val cyl = sqrt(max(0.0, 1 - v * v))
             val diffuse = max(0.0, 0.85 * cyl - 0.35 * v)
             val spec = 0.25 * exp(-((v + 0.35) / 0.12).let { it * it })
-            a * (0.25 + 0.75 * diffuse + spec)
+            val groove = 1 - grooveDepth * 0.78 * exp(-((u - 0.5) / 0.03).let { it * it })
+            a * (0.25 + 0.75 * diffuse + spec) * groove
         }
         val gap = run {
             // De biais, la face latérale d'une colonne masque une partie du joint.

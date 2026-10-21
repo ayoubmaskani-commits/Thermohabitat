@@ -69,6 +69,12 @@ object PlaneRectifier {
 
     fun defaultFocalPx(imageWidth: Int, imageHeight: Int): Double = DEFAULT_FOCAL_FACTOR * max(imageWidth, imageHeight)
 
+    /** Focale en px d'après la focale équivalente 24×36 (EXIF FocalLengthIn35mmFilm) : f × diagonale px / 43,27 mm. */
+    fun focalPxFrom35mm(focal35mm: Double, imageWidth: Int, imageHeight: Int): Double {
+        require(focal35mm > 0) { "Focale invalide" }
+        return focal35mm * hypot(imageWidth.toDouble(), imageHeight.toDouble()) / 43.27
+    }
+
     /**
      * Focale (px) déduite du quadrilatère, null si elle n'est pas calculable : une paire de côtés parallèles dans
      * l'image (rotation autour d'un seul axe) ne fournit qu'un point de fuite.
@@ -100,7 +106,7 @@ object PlaneRectifier {
         val n = zhangVectors(q, imageWidth, imageHeight)
         // Vue quasi frontale (parallélogramme) : tan(angle) < 0,035 sur les deux axes, la focale n'intervient plus.
         val frontal = n == null || (tilt(n, 0, f) < 0.035 && tilt(n, 3, f) < 0.035)
-        val ratio = if (frontal) sidesRatio(q) else aspectFor(n!!, f)
+        val ratio = if (frontal || n == null) sidesRatio(q) else aspectFor(n, f)
         // Incertitude : pointé (perturbation déterministe des coins) et focale (± uF).
         val rnd = Random(SEED)
         val samples = DoubleArray(32) {
@@ -109,7 +115,7 @@ object PlaneRectifier {
             if (frontal || np == null) sidesRatio(qp) else aspectFor(np, f)
         }
         val uCorner = std(samples) / ratio
-        val uFocal = if (frontal) 0.0 else abs(aspectFor(n!!, f * (1 + uF)) - aspectFor(n, f / (1 + uF))) / (2 * ratio)
+        val uFocal = if (frontal || n == null) 0.0 else abs(aspectFor(n, f * (1 + uF)) - aspectFor(n, f / (1 + uF))) / (2 * ratio)
         val uRel = sqrt(uCorner * uCorner + uFocal * uFocal)
         val angle = if (n == null) 0.0 else viewAngle(n, f)
         return AspectEstimate(
@@ -151,9 +157,24 @@ object PlaneRectifier {
         val q = Homography.orderCorners(quad)
         val h = faceToImage(q, outWidth, outHeight)
             ?: throw IllegalArgumentException("Contour invalide : les 4 coins doivent former un quadrilatère convexe.")
-        val m = h.m
+        return rectify(image, h, outWidth, outHeight, supersampleFor(q, outWidth, outHeight))
+    }
+
+    /** Sur-échantillonnage utile (2 si la face réduit nettement la photo, sinon 1). */
+    internal fun supersampleFor(q: List<ImagePoint>, outWidth: Int, outHeight: Int): Int {
         val shrink = max(max(dist(q[0], q[1]), dist(q[3], q[2])) / outWidth, max(dist(q[0], q[3]), dist(q[1], q[2])) / outHeight)
-        val ss = if (shrink > 1.5) 2 else 1
+        return if (shrink > 1.5) 2 else 1
+    }
+
+    /**
+     * Image redressée à travers une homographie face → photo quelconque (p. ex. contour élargi de marges) ;
+     * les points hors de la photo prennent la valeur du bord le plus proche.
+     * @param supersample sur-échantillonnage par axe (1 ou 2), utile quand la sortie réduit la photo
+     */
+    fun rectify(image: GrayImage, faceToImage: Homography, outWidth: Int, outHeight: Int, supersample: Int = 1): GrayImage {
+        require(outWidth > 0 && outHeight > 0) { "Taille de sortie invalide" }
+        val m = faceToImage.m
+        val ss = supersample.coerceIn(1, 3)
         val inv = 1.0 / (ss * ss)
         val out = FloatArray(outWidth * outHeight)
         val src = image.pixels; val iw = image.width; val ih = image.height

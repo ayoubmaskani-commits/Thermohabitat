@@ -2,8 +2,6 @@ package fr.thermohabitat.thermal.vision
 
 import fr.thermohabitat.thermal.model.ValueOrigin
 import kotlin.math.abs
-import kotlin.math.ln
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlin.random.Random
@@ -42,8 +40,16 @@ data class PhotoIdentification(
     /** Avertissements (précision réduite, référence douteuse…). */
     val warnings: List<String>,
     val aspect: AspectEstimate,
-    /** Rapport largeur / hauteur utilisé pour le redressement (mesuré avec un objet à 4 coins, sinon estimé). */
+    /** Rapport largeur / hauteur utilisé pour le redressement (estimé par la perspective du contour). */
     val aspectRatioUsed: Double,
+    /**
+     * Rapport longueur / hauteur du corps : MESURÉ avec un objet à 4 coins, sinon estimé à partir du redressement
+     * et des bords détectés.
+     */
+    val bodyAspectRatio: Double,
+    /** Haut et bas du corps détectés au milieu de la face (px de la face), null si non détectés (coins retenus). */
+    val bodyRowsFacePx: ClosedFloatingPointRange<Double>?,
+    /** Vrai si proportions et échelle viennent d'un objet à 4 coins (indépendant de la focale). */
     val aspectMeasured: Boolean,
     /** Pas / hauteur (sans unité), utile au rapprochement avec la bibliothèque même sans échelle. */
     val pitchToHeightRatio: Double?,
@@ -69,9 +75,11 @@ data class PhotoIdentification(
     fun boundariesFor(count: Int): List<Double> =
         ElementCounter.evenBoundaries(count, extentFacePx.start, extentFacePx.endInclusive)
 
-    /** Segments (haut, bas) dans la photo des limites verticales données en px de la face. */
-    fun boundaryLinesInImage(boundaries: List<Double> = boundariesFacePx): List<Pair<ImagePoint, ImagePoint>> =
-        boundaries.map { x -> faceToImage.map(x, 0.0) to faceToImage.map(x, faceHeight.toDouble()) }
+    /** Segments (haut, bas) dans la photo des limites verticales données en px de la face, sur la hauteur du corps. */
+    fun boundaryLinesInImage(boundaries: List<Double> = boundariesFacePx): List<Pair<ImagePoint, ImagePoint>> {
+        val rows = bodyRowsFacePx ?: 0.0..faceHeight.toDouble()
+        return boundaries.map { x -> faceToImage.map(x, rows.start) to faceToImage.map(x, rows.endInclusive) }
+    }
 
     /** Dimensions pour un nombre d'éléments choisi (le pas change, la longueur aussi avec un pas standard). */
     fun dimensionsFor(count: Int): PhotoDimensions {
@@ -91,16 +99,17 @@ class PhotoScale internal constructor(
     private val heightMm: Double?,
     private val heightRel: Double,
     private val origin: ValueOrigin,
-    /** Pas standard : (pas, incertitude relative, hauteur pour un élément de la face = H·pas/P) */
+    /** Pas standard : (pas mm, incertitude relative, hauteur du corps en px de face). */
     private val standardPitch: Triple<Double, Double, Double>? = null,
+    /** Étendue du corps en px de face (pas standard). */
     private val extentPx: Double = 0.0,
 ) {
     fun dimensions(count: Int): PhotoDimensions {
         if (standardPitch != null) {
-            val (pitch, rel, heightPerPitchUnit) = standardPitch
+            val (pitch, rel, bodyHeightPx) = standardPitch
             val length = count * pitch
-            // Hauteur = (hauteur face / pas face) × pas, avec pas face = étendue / nombre.
-            val height = heightPerPitchUnit * count / extentPx * pitch
+            // Hauteur = (hauteur du corps / pas dans la face) × pas, avec pas dans la face = étendue / nombre.
+            val height = bodyHeightPx * count / extentPx * pitch
             return PhotoDimensions(
                 DimensionEstimate(pitch, pitch * rel),
                 DimensionEstimate(height, height * sqrt(rel * rel + heightRel * heightRel)),
@@ -130,13 +139,20 @@ object PhotoIdentifier {
     const val POINTING_ERROR_PX = 3.0
 
     private const val SAMPLES = 48
+    private const val MARGIN_FRACTION = 0.15
+    private const val MARGIN_Y_FRACTION = 0.08
     private const val SEED = 7_331
 
     /**
+     * Étapes : rapport d'aspect du contour (Zhang & He) → face redressée (≤ 1200 px, avec marges) → comptage
+     * (spectre, harmoniques, joints, bords réels, haut et bas du corps) → échelle et incertitudes (perturbation
+     * déterministe de ±[POINTING_ERROR_PX] px par point). Quelques dizaines de millisecondes sur JVM de bureau.
+     *
      * @param image photo en niveaux de gris (px de la photo d'origine)
      * @param radiatorCorners 4 coins du corps du radiateur (sans pieds), ordre quelconque, px de [image]
      * @param reference référence d'échelle optionnelle (points en px de [image])
-     * @param focalPx focale connue en px (EXIF), sinon estimée
+     * @param focalPx focale connue en px (EXIF, voir [PlaneRectifier.focalPxFrom35mm]), sinon estimée
+     * @param minElements / maxElements bornes de recherche du nombre d'éléments
      * @throws IllegalArgumentException contour ou référence invalide (message en français)
      */
     fun identify(
@@ -155,28 +171,33 @@ object PhotoIdentifier {
         val messages = ArrayList<String>(); val warnings = ArrayList<String>()
         val aspect = PlaneRectifier.estimateAspectRatio(q, image.width, image.height, focalPx)
 
-        // Objet à 4 coins dans le plan : homographie métrique exacte, rapport d'aspect MESURÉ.
-        var planar: PlanarSetup? = null
-        if (reference is ScaleReference.PlanarObject) {
-            planar = planarSetup(reference, q, aspect.ratio, warnings)
-        }
-        val ratioUsed = planar?.dims?.let { it.lengthMm / it.heightMm } ?: aspect.ratio
-        val size = PlaneRectifier.faceSize(q, ratioUsed)
+        val ratioUsed = aspect.ratio
+        // Face nominale bornée pour que la face élargie de ses marges reste ≤ 1200 px (calcul rapide sur téléphone).
+        val size = PlaneRectifier.faceSize(q, ratioUsed, (PlaneRectifier.MAX_FACE_SIDE / (1 + 2 * MARGIN_FRACTION)).toInt())
         val faceToImage = PlaneRectifier.faceToImage(q, size.width, size.height)
             ?: throw IllegalArgumentException("Contour invalide : les 4 coins doivent former un quadrilatère convexe.")
         val imageToFace = faceToImage.inverse()
             ?: throw IllegalArgumentException("Contour invalide : redressement impossible.")
-        val face = PlaneRectifier.rectify(image, q, size.width, size.height)
+        // Objet à 4 coins dans le plan : échelles horizontale et verticale lues dans la face redressée.
+        val planar = (reference as? ScaleReference.PlanarObject)?.let { planarSetup(it, q, imageToFace, warnings) }
+        // Face élargie de marges (15 % de la largeur de chaque côté, 8 % de la hauteur en haut et en bas) : les bords
+        // réels du radiateur y restent visibles même si les coins sont posés un peu à l'intérieur.
+        val margin = (MARGIN_FRACTION * size.width).roundToInt()
+        val marginY = (MARGIN_Y_FRACTION * size.height).roundToInt()
+        val shift = Homography(doubleArrayOf(1.0, 0.0, -margin.toDouble(), 0.0, 1.0, -marginY.toDouble(), 0.0, 0.0, 1.0))
+        val face = PlaneRectifier.rectify(image, faceToImage * shift, size.width + 2 * margin, size.height + 2 * marginY,
+            PlaneRectifier.supersampleFor(q, size.width, size.height))
 
-        // Zone de l'objet de référence ignorée par le comptage.
+        // Zone de l'objet de référence ignorée par l'analyse (px de la face élargie).
         val excluded = planar?.let { p ->
             val pts = p.corners.map { imageToFace.map(it) }
-            listOf(PixelRect(pts.minOf { it.x } - 6, pts.minOf { it.y } - 6, pts.maxOf { it.x } + 6, pts.maxOf { it.y } + 6))
+            listOf(PixelRect(pts.minOf { it.x } - 6 + margin, pts.minOf { it.y } - 6 + marginY,
+                pts.maxOf { it.x } + 6 + margin, pts.maxOf { it.y } + 6 + marginY))
         } ?: emptyList()
 
         // Échelle provisoire (mm par px de face) → a priori de pas en px.
         val preScale: Double? = when (reference) {
-            is ScaleReference.PlanarObject -> planar!!.dims.lengthMm / size.width
+            is ScaleReference.PlanarObject -> planar!!.scaleX
             is ScaleReference.KnownLength -> {
                 val d = PlaneRectifier.dist(imageToFace.map(reference.start), imageToFace.map(reference.end))
                 require(d > 1.0) { "Les deux points de la référence sont confondus." }
@@ -187,8 +208,20 @@ object PhotoIdentifier {
             else -> null
         }
         val prior = preScale?.let { (PLAUSIBLE_PITCH_MM.start / it)..(PLAUSIBLE_PITCH_MM.endInclusive / it) }
-        val counting = ElementCounter.countRectified(face, prior, minElements, maxElements, excluded)
+        val counting = ElementCounter.countRectified(face, prior, minElements, maxElements, excluded,
+            contour = margin.toDouble()..(margin + size.width).toDouble(),
+            contourRows = marginY.toDouble()..(marginY + size.height).toDouble()).shifted(-margin.toDouble())
         val count = counting.count
+        // Haut et bas réels du corps (coins pointés un peu trop haut ou trop bas) entre les bords retenus.
+        val cols = if (count != null && counting.startPx != null && counting.endPx != null) {
+            (counting.startPx + margin)..(counting.endPx + margin)
+        } else margin.toDouble()..(margin + size.width).toDouble()
+        val body = VerticalExtent.detect(face, cols, marginY.toDouble()..(marginY + size.height).toDouble(), excluded)
+        val heightFrac = body?.let { it.meanHeight(cols.start, cols.endInclusive) / size.height }?.takeIf { it in 0.85..1.15 } ?: 1.0
+        val bodyRows = if (heightFrac != 1.0 && body != null) {
+            val xm = (cols.start + cols.endInclusive) / 2
+            (body.top(xm) - marginY)..(body.bottom(xm) - marginY)
+        } else null
 
         // Étendue et pas en fraction de la largeur de la face.
         val extentFrac = if (count != null && counting.startPx != null && counting.endPx != null) {
@@ -197,17 +230,22 @@ object PhotoIdentifier {
         val pitchFrac = counting.periodPx?.takeIf { count != null }?.let { it / size.width }
         // Incertitude due à la détection des bords (±0,15 pas chacun) quand l'étendue vient du comptage.
         val extentRel = if (count != null && pitchFrac != null) 0.15 * sqrt(2.0) * pitchFrac / extentFrac else 0.0
+        // Haut et bas : écart des points aux droites détectées, sinon pointé des coins (≈ 1 % de la hauteur chacun).
+        val heightDetRel = if (bodyRows != null) (body!!.residualPx + 0.5) * sqrt(2.0) / size.height else 0.0
 
         val scale: PhotoScale? = when (reference) {
             null -> null
-            is ScaleReference.PlanarObject -> planarScale(planar!!, reference, q, extentFrac, extentRel)
-            is ScaleReference.KnownLength -> knownLengthScale(reference, q, ratioUsed, aspect.relativeUncertainty, extentFrac, extentRel, warnings)
-            is ScaleReference.MeasuredDimension -> measuredScale(reference, ratioUsed, aspect.relativeUncertainty, extentFrac, extentRel)
+            is ScaleReference.PlanarObject -> planarScale(planar!!, reference, q, size, extentFrac * size.width, extentRel,
+                heightFrac * size.height, heightDetRel, warnings)
+            is ScaleReference.KnownLength -> knownLengthScale(reference, q, ratioUsed, aspect.relativeUncertainty, extentFrac, extentRel,
+                heightFrac, heightDetRel, warnings)
+            is ScaleReference.MeasuredDimension -> measuredScale(reference, ratioUsed, aspect.relativeUncertainty, extentFrac / heightFrac,
+                sqrt(sq(extentRel) + sq(heightDetRel)))
             is ScaleReference.StandardPitch -> if (count != null && pitchFrac != null) {
                 PhotoScale(
                     lengthMm = null, lengthRel = 0.0, heightMm = null, heightRel = aspect.relativeUncertainty,
                     origin = ValueOrigin.ESTIMATED,
-                    standardPitch = Triple(reference.pitchMm, reference.uncertaintyMm / reference.pitchMm, size.height.toDouble()),
+                    standardPitch = Triple(reference.pitchMm, reference.uncertaintyMm / reference.pitchMm, heightFrac * size.height),
                     extentPx = extentFrac * size.width,
                 )
             } else null
@@ -216,8 +254,11 @@ object PhotoIdentifier {
         else scale?.dimensions(1)?.let { it.copy(pitchMm = null) } ?: PhotoDimensions(null, null, null, ValueOrigin.UNKNOWN)
 
         // Messages.
+        val bodyAspect = if (planar != null && dims.lengthMm != null && dims.heightMm != null) {
+            dims.lengthMm.valueMm / dims.heightMm.valueMm
+        } else extentFrac * ratioUsed / heightFrac
         messages += if (planar != null) {
-            "Façade redressée avec ${reference!!.label.lowercase()} : rapport longueur / hauteur mesuré ${fmt(ratioUsed, 2)}."
+            "Échelle et proportions lues sur ${reference.label.lowercase()} : rapport longueur / hauteur mesuré ${fmt(bodyAspect, 2)}."
         } else if (aspect.frontal) {
             "Photo quasi de face : rapport longueur / hauteur ${fmt(ratioUsed, 2)}."
         } else {
@@ -244,7 +285,7 @@ object PhotoIdentifier {
             }
         }
 
-        val pitchToHeight = if (count != null && pitchFrac != null) pitchFrac * size.width / size.height else null
+        val pitchToHeight = if (count != null && pitchFrac != null) pitchFrac * size.width / (heightFrac * size.height) else null
         val dimRel = listOfNotNull(dims.lengthMm, dims.heightMm).maxOfOrNull { it.relativeUncertainty }
         val dimFactor = dimRel?.let { (1 - 2 * it).coerceIn(0.5, 1.0) } ?: 1.0
         val aspectFactor = if (planar != null || aspect.frontal) 1.0 else (0.7 + 0.3 * aspect.reliability)
@@ -262,6 +303,8 @@ object PhotoIdentifier {
             warnings = warnings.distinct(),
             aspect = aspect,
             aspectRatioUsed = ratioUsed,
+            bodyAspectRatio = bodyAspect,
+            bodyRowsFacePx = bodyRows,
             aspectMeasured = planar != null,
             pitchToHeightRatio = pitchToHeight,
             corners = q,
@@ -276,67 +319,92 @@ object PhotoIdentifier {
 
     // --- Objet à 4 coins ---
 
-    private class PlanarSetup(val corners: List<ImagePoint>, val landscape: Boolean, val dims: PlaneQuadDimensions)
+    /**
+     * La perspective vient du contour du radiateur (grand, bien déterminé) : la face redressée est exacte à une
+     * dilatation horizontale près (rapport d'aspect estimé). L'objet, petit, ne donne que les ÉCHELLES : son grand
+     * et son petit côté mesurés dans la face fixent les mm par px en x et en y, sans focale. Extrapoler la propre
+     * homographie d'une carte de quelques dizaines de pixels au radiateur entier serait bien moins précis.
+     */
+    private class PlanarSetup(val corners: List<ImagePoint>, val landscape: Boolean, val scaleX: Double, val scaleY: Double)
 
-    private fun planarSetup(ref: ScaleReference.PlanarObject, q: List<ImagePoint>, aspectRatio: Double, warnings: MutableList<String>): PlanarSetup {
-        val oq = Homography.orderCorners(ref.corners)
-        require(Homography.isConvex(oq)) { "Objet de référence : les 4 coins doivent former un quadrilatère convexe." }
-        // Orientation de l'objet (grand côté horizontal ou vertical) lue dans la face redressée par le rapport estimé.
-        val frame = Homography.rectToQuad(aspectRatio * 1000, 1000.0, q)?.inverse()
-        val (wObs, hObs) = (frame?.let { f -> oq.map { f.map(it) } } ?: oq).let { p ->
-            (PlaneRectifier.dist(p[0], p[1]) + PlaneRectifier.dist(p[3], p[2])) / 2 to (PlaneRectifier.dist(p[0], p[3]) + PlaneRectifier.dist(p[1], p[2])) / 2
-        }
-        val rObs = wObs / hObs
-        val landscape = rObs >= 1.0
-        val deviation = abs(ln(if (landscape) rObs / ref.obj.ratio else rObs * ref.obj.ratio))
-        val h = ScaleCalculator.metricHomography(ref.obj, oq, landscape)
-            ?: throw IllegalArgumentException("Objet de référence : coins dégénérés.")
-        val dims = ScaleCalculator.quadDimensions(h, q)
-        require(dims.lengthMm.isFinite() && dims.heightMm.isFinite() && dims.lengthMm > 0 && dims.heightMm > 0) {
-            "Référence incohérente avec le contour du radiateur : vérifiez les coins."
-        }
-        val objPx = (0 until 4).sumOf { PlaneRectifier.dist(oq[it], oq[(it + 1) % 4]) } / 4
-        if (objPx < 60) warnings += "La référence est petite dans l'image : rapprochez-vous pour plus de précision."
-        if (ref.obj.longMm / max(dims.lengthMm, dims.heightMm) < 0.08) {
-            warnings += "Référence petite devant le radiateur : l'incertitude est élargie (une feuille A4 serait plus précise)."
-        }
-        if (deviation > 0.15) {
-            warnings += "La forme de la référence ne correspond pas à celle attendue : elle semble hors du plan de la façade ou ses coins sont mal placés."
-        }
-        if (dims.maxAngleErrorDeg > 5) {
-            warnings += "Le contour du radiateur n'est pas rectangulaire dans le plan de la référence : vérifiez les coins et que la référence est plaquée contre la façade."
-        }
-        return PlanarSetup(oq, landscape, dims)
+    /** Échelles (mm par px de face) en x et en y tirées des côtés de l'objet ; null si dégénéré. */
+    private fun objectScales(obj: ScaleObject, landscape: Boolean, corners: List<ImagePoint>, imageToFace: Homography): Pair<Double, Double>? {
+        val p = corners.map { imageToFace.map(it) }
+        val wF = (PlaneRectifier.dist(p[0], p[1]) + PlaneRectifier.dist(p[3], p[2])) / 2
+        val hF = (PlaneRectifier.dist(p[0], p[3]) + PlaneRectifier.dist(p[1], p[2])) / 2
+        if (!(wF > 1e-6) || !(hF > 1e-6)) return null
+        val (wMm, hMm) = if (landscape) obj.longMm to obj.shortMm else obj.shortMm to obj.longMm
+        return (wMm / wF) to (hMm / hF)
     }
 
-    private fun planarScale(p: PlanarSetup, ref: ScaleReference.PlanarObject, q: List<ImagePoint>, extentFrac: Double, extentRel: Double): PhotoScale {
+    private fun planarSetup(ref: ScaleReference.PlanarObject, q: List<ImagePoint>, imageToFace: Homography, warnings: MutableList<String>): PlanarSetup {
+        val oq = Homography.orderCorners(ref.corners)
+        require(Homography.isConvex(oq)) { "Objet de référence : les 4 coins doivent former un quadrilatère convexe." }
+        // Orientation (grand côté horizontal ou vertical) lue dans la face redressée.
+        val pf = oq.map { imageToFace.map(it) }
+        val wObs = (PlaneRectifier.dist(pf[0], pf[1]) + PlaneRectifier.dist(pf[3], pf[2])) / 2
+        val hObs = (PlaneRectifier.dist(pf[0], pf[3]) + PlaneRectifier.dist(pf[1], pf[2])) / 2
+        val landscape = wObs >= hObs
+        val (sx, sy) = objectScales(ref.obj, landscape, oq, imageToFace)
+            ?: throw IllegalArgumentException("Objet de référence : coins dégénérés.")
+        val objPx = (0 until 4).sumOf { PlaneRectifier.dist(oq[it], oq[(it + 1) % 4]) } / 4
+        if (objPx < 60) warnings += "La référence est petite dans l'image : rapprochez-vous pour plus de précision."
+        val radiatorPx = (0 until 4).sumOf { PlaneRectifier.dist(q[it], q[(it + 1) % 4]) } / 4
+        if (objPx / radiatorPx < 0.12) {
+            warnings += "Référence petite devant le radiateur : l'incertitude est élargie (une feuille A4 serait plus précise)."
+        }
+        return PlanarSetup(oq, landscape, sx, sy)
+    }
+
+    private fun planarScale(
+        p: PlanarSetup, ref: ScaleReference.PlanarObject, q: List<ImagePoint>, size: FaceSize,
+        extentPx: Double, extentRel: Double, heightPx: Double, heightRel: Double, warnings: MutableList<String>,
+    ): PhotoScale {
+        val length = extentPx * p.scaleX
+        val height = heightPx * p.scaleY
         val rnd = Random(SEED)
         val ls = ArrayList<Double>(); val hs = ArrayList<Double>()
         repeat(SAMPLES) {
             val qp = q.map { jitter(it, rnd) }; val op = p.corners.map { jitter(it, rnd) }
-            val h = ScaleCalculator.metricHomography(ref.obj, op, p.landscape) ?: return@repeat
-            val d = ScaleCalculator.quadDimensions(h, qp)
-            if (d.lengthMm.isFinite() && d.heightMm.isFinite()) { ls += d.lengthMm; hs += d.heightMm }
+            val f = Homography.rectToQuad(size.width.toDouble(), size.height.toDouble(), qp)?.inverse() ?: return@repeat
+            val (sx, sy) = objectScales(ref.obj, p.landscape, op, f) ?: return@repeat
+            ls += extentPx * sx; hs += heightPx * sy
+        }
+        // Contrôle de cohérence par l'homographie propre de l'objet, seulement quand elle est bien déterminée.
+        val own = ScaleCalculator.metricHomography(ref.obj, p.corners, p.landscape)?.let { ScaleCalculator.quadDimensions(it, q) }
+        if (own != null && own.heightMm.isFinite()) {
+            val hsOwn = ArrayList<Double>()
+            repeat(SAMPLES) {
+                val h = ScaleCalculator.metricHomography(ref.obj, p.corners.map { jitter(it, rnd) }, p.landscape) ?: return@repeat
+                val d = ScaleCalculator.quadDimensions(h, q).heightMm
+                if (d.isFinite()) hsOwn += d
+            }
+            if (relStd(hsOwn) < 0.03) {
+                if (abs(own.heightMm - height) / height > 0.08 || own.maxAngleErrorDeg > 5) {
+                    warnings += "La référence et le contour du radiateur ne concordent pas : vérifiez que la référence est " +
+                        "plaquée contre la façade et que les coins sont bien placés."
+                }
+            }
         }
         // Terme systématique : épaisseur et planéité de la référence (≈ 0,5 %).
         val sys = 0.005
         val lRel = sqrt(sq(relStd(ls)) + sq(extentRel) + sq(sys))
-        val hRel = sqrt(sq(relStd(hs)) + sq(sys))
-        return PhotoScale(extentFrac * p.dims.lengthMm, lRel, p.dims.heightMm, hRel, ValueOrigin.MEASURED)
+        val hRel = sqrt(sq(relStd(hs)) + sq(heightRel) + sq(sys))
+        return PhotoScale(length, lRel, height, hRel, ValueOrigin.MEASURED)
     }
 
     // --- Longueur connue (2 points) ---
 
     private fun knownLengthScale(
         ref: ScaleReference.KnownLength, q: List<ImagePoint>, ratio: Double, ratioRel: Double,
-        extentFrac: Double, extentRel: Double, warnings: MutableList<String>,
+        extentFrac: Double, extentRel: Double, heightFrac: Double, heightRel: Double, warnings: MutableList<String>,
     ): PhotoScale? {
         fun eval(qp: List<ImagePoint>, a: ImagePoint, b: ImagePoint, r: Double): Pair<Double, Double>? {
             val f = Homography.rectToQuad(r * 1000, 1000.0, qp)?.inverse() ?: return null
             val d = PlaneRectifier.dist(f.map(a), f.map(b))
             if (!(d > 1e-6)) return null
             val s = ref.lengthMm / d
-            return (extentFrac * r * 1000 * s) to (1000 * s)
+            return (extentFrac * r * 1000 * s) to (heightFrac * 1000 * s)
         }
         val nominal = eval(q, ref.start, ref.end, ratio) ?: return null
         val rnd = Random(SEED)
@@ -353,7 +421,7 @@ object PhotoIdentifier {
         val sys = 0.01
         return PhotoScale(
             nominal.first, sqrt(sq(relStd(ls)) + sq(extentRel) + sq(sys)),
-            nominal.second, sqrt(sq(relStd(hs)) + sq(sys)),
+            nominal.second, sqrt(sq(relStd(hs)) + sq(heightRel) + sq(sys)),
             ValueOrigin.MEASURED,
         )
     }
@@ -372,6 +440,13 @@ object PhotoIdentifier {
     }
 
     // --- Outils ---
+
+    /** Résultat de comptage exprimé dans le repère de la face nominale (décalage des abscisses). */
+    private fun ElementCountResult.shifted(dx: Double) = copy(
+        boundariesPx = boundariesPx.map { it + dx },
+        startPx = startPx?.plus(dx),
+        endPx = endPx?.plus(dx),
+    )
 
     private fun jitter(p: ImagePoint, rnd: Random) = ImagePoint(
         p.x + rnd.nextDouble(-POINTING_ERROR_PX, POINTING_ERROR_PX), p.y + rnd.nextDouble(-POINTING_ERROR_PX, POINTING_ERROR_PX),

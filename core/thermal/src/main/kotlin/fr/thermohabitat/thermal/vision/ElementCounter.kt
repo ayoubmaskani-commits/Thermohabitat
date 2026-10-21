@@ -140,7 +140,10 @@ object ElementCounter {
      * @param pitchPriorPx plage de pas plausible en px redressés (déduite de l'échelle), sinon
      *   [DEFAULT_PITCH_TO_HEIGHT] × hauteur de l'image
      * @param excluded zones à ignorer (objet de référence posé sur la façade)
-     * @return nombre proposé, alternatives, limites (bords + joints, px redressés) et confiance
+     * @param contour abscisses (px) des bords du contour pointé quand [face] comporte des marges latérales
+     *   (recommandé : les bords réels du radiateur y sont alors visibles) ; null = toute la largeur
+     * @param contourRows ordonnées (px) du haut et du bas du contour si [face] a des marges verticales ; null = toute la hauteur
+     * @return nombre proposé, alternatives, limites (bords + joints, px de [face]) et confiance
      */
     fun countRectified(
         face: GrayImage,
@@ -148,7 +151,9 @@ object ElementCounter {
         minElements: Int = 3,
         maxElements: Int = 60,
         excluded: List<PixelRect> = emptyList(),
-    ): ElementCountResult = RectifiedCounting.count(face, pitchPriorPx, minElements, maxElements, excluded)
+        contour: ClosedFloatingPointRange<Double>? = null,
+        contourRows: ClosedFloatingPointRange<Double>? = null,
+    ): ElementCountResult = RectifiedCounting.count(face, pitchPriorPx, minElements, maxElements, excluded, contour, contourRows)
 
     /** Limites régulières de [count] éléments entre [startPx] et [endPx] (nombre corrigé par l'utilisateur). */
     fun evenBoundaries(count: Int, startPx: Double, endPx: Double): List<Double> {
