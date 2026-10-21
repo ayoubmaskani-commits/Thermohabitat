@@ -22,6 +22,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class PhotoEditRoute(val photoId: Long)
 @Serializable data class ElementCountRoute(val photoId: Long, val radiatorId: Long)
 @Serializable data class MeasureRoute(val photoId: Long, val radiatorId: Long)
+/** Identification géométrique sur photo : contour, échelle, comptage des éléments et rapprochement avec la base. */
+@Serializable data class PhotoIdentifyRoute(val photoId: Long, val radiatorId: Long)
 @Serializable data class RadiatorLibraryRoute(val radiatorId: Long)
 
 // --- Simulations ---

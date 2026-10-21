@@ -62,6 +62,8 @@ fun ImageWorkArea(
     /** Début de glissé : position en pixels image, et l'équivalent de 24 dp à l'écran en pixels image (tolérance minimale de saisie). */
     onDragStart: ((Offset, Float) -> Unit)? = null,
     onDrag: ((Offset, Offset) -> Unit)? = null,
+    /** Fin (ou annulation) du glissé, p. ex. pour masquer une loupe. */
+    onDragEnd: (() -> Unit)? = null,
     overlay: DrawScope.(ImageFrame) -> Unit = {},
 ) {
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
@@ -83,6 +85,8 @@ fun ImageWorkArea(
                             val f = { ImageFrame.of(IntSize(size.width, size.height), bitmap.width, bitmap.height) }
                             detectDragGestures(
                                 onDragStart = { pos -> val fr = f(); onDragStart?.invoke(fr.toImage(pos), 24.dp.toPx() / fr.scale) },
+                                onDragEnd = { onDragEnd?.invoke() },
+                                onDragCancel = { onDragEnd?.invoke() },
                             ) { change, amount ->
                                 change.consume()
                                 val fr = f()

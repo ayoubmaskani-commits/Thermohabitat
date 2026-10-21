@@ -205,7 +205,9 @@ enum class IdentificationMethod(val label: String) {
     LIBRARY("Bibliothèque illustrée"),
     OCR("Lecture de la plaque (OCR)"),
     AI_MODEL("Modèle d'IA embarqué"),
-    DOCUMENTATION("Documentation fabricant");
+    DOCUMENTATION("Documentation fabricant"),
+    /** Contour, échelle et comptage des éléments sur une photo (même prise de biais), puis rapprochement avec la base. */
+    PHOTO_GEOMETRY("Analyse géométrique de la photo");
 }
 
 @Serializable

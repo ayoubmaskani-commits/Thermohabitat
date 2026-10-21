@@ -47,6 +47,7 @@ import fr.thermohabitat.pro.ui.photo.CaptureScreen
 import fr.thermohabitat.pro.ui.photo.ElementCountScreen
 import fr.thermohabitat.pro.ui.photo.MeasureScreen
 import fr.thermohabitat.pro.ui.photo.PhotoEditScreen
+import fr.thermohabitat.pro.ui.photo.PhotoIdentifyScreen
 import fr.thermohabitat.pro.ui.radiators.RadiatorEditScreen
 import fr.thermohabitat.pro.ui.radiators.RadiatorLibraryScreen
 import fr.thermohabitat.pro.ui.radiators.RadiatorsScreen
@@ -144,6 +145,7 @@ fun AppNavHost(nav: NavHostController = rememberNavController()) {
             composable<PhotoEditRoute> { PhotoEditScreen(nav) }
             composable<ElementCountRoute> { ElementCountScreen(nav) }
             composable<MeasureRoute> { MeasureScreen(nav) }
+            composable<PhotoIdentifyRoute> { PhotoIdentifyScreen(nav) }
             composable<RadiatorLibraryRoute> { RadiatorLibraryScreen(nav) }
 
             composable<ComparisonRoute> { ComparisonScreen(nav) }

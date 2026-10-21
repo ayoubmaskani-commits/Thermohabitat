@@ -345,7 +345,8 @@ class PdfReportGenerator @Inject constructor(
         w.bullet("Puissances des radiateurs corrigées selon la NF EN 442 (écart logarithmique, exposant n) ; les estimations géométriques sont des ordres de grandeur.")
         w.bullet("Seuls les radiateurs dont les caractéristiques ont été validées par l'utilisateur sont pris en compte.")
         w.bullet("Les températures de base, degrés-jours et propriétés des matériaux anciens sont indicatifs lorsqu'ils sont marqués « estimés ».")
-        w.bullet("Aucune reconnaissance automatique du type de radiateur n'est utilisée sans modèle d'IA installé ; l'identification repose sur la bibliothèque illustrée et la saisie.")
+        w.bullet("Aucune reconnaissance automatique du type de radiateur n'est utilisée sans modèle d'IA installé ; l'identification repose sur la bibliothèque illustrée, " +
+            "l'analyse géométrique des photos (nombre d'éléments, dimensions avec une échelle, types compatibles : propositions validées par l'utilisateur) et la saisie.")
         r.warnings.forEach { w.bullet(it) }
     }
 

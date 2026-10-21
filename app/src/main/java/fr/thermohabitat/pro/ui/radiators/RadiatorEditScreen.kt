@@ -73,6 +73,7 @@ import fr.thermohabitat.pro.ui.components.DropdownField
 import fr.thermohabitat.pro.ui.components.FieldRow
 import fr.thermohabitat.pro.ui.components.InfoBanner
 import fr.thermohabitat.pro.ui.components.IntField
+import fr.thermohabitat.pro.ui.components.LargeActionButton
 import fr.thermohabitat.pro.ui.components.NumberField
 import fr.thermohabitat.pro.ui.components.OriginSelector
 import fr.thermohabitat.pro.ui.components.PhotoStrip
@@ -88,9 +89,9 @@ import fr.thermohabitat.pro.ui.components.ValueRow
 import fr.thermohabitat.pro.ui.components.galleryRequest
 import fr.thermohabitat.pro.ui.components.rememberGalleryPicker
 import fr.thermohabitat.pro.ui.navigation.CaptureRoute
-import fr.thermohabitat.pro.ui.navigation.ElementCountRoute
 import fr.thermohabitat.pro.ui.navigation.MeasureRoute
 import fr.thermohabitat.pro.ui.navigation.PhotoEditRoute
+import fr.thermohabitat.pro.ui.navigation.PhotoIdentifyRoute
 import fr.thermohabitat.pro.ui.navigation.RadiatorEditRoute
 import fr.thermohabitat.pro.ui.navigation.RadiatorLibraryRoute
 import fr.thermohabitat.pro.ui.util.AutoSaver
@@ -393,10 +394,11 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                     ChoiceChips(listOf(PhotoKind.FRONT, PhotoKind.SIDE, PhotoKind.NAMEPLATE, PhotoKind.DETAIL), current.kind, { it.label }, { vm.setPhotoKind(current, it) })
                     // Tous les outils restent visibles : ils passent à la ligne au lieu de défiler hors écran.
                     ActionRow {
-                        OutlinedButton(onClick = { nav.navigate(PhotoEditRoute(current.id)) }) { Icon(Icons.Filled.Crop, null); Spacer(Modifier.width(6.dp)); Text("Recadrer") }
-                        OutlinedButton(onClick = { nav.navigate(ElementCountRoute(current.id, r.id)) }) {
-                            Icon(Icons.Filled.ViewColumn, null); Spacer(Modifier.width(6.dp)); Text("Compter les éléments")
+                        // Identification (éléments, échelle, type) : remplace l'ancien comptage sur zone rectangulaire de face.
+                        Button(onClick = { nav.navigate(PhotoIdentifyRoute(current.id, r.id)) }) {
+                            Icon(Icons.Filled.ViewColumn, null); Spacer(Modifier.width(6.dp)); Text("Identifier sur la photo")
                         }
+                        OutlinedButton(onClick = { nav.navigate(PhotoEditRoute(current.id)) }) { Icon(Icons.Filled.Crop, null); Spacer(Modifier.width(6.dp)); Text("Recadrer") }
                         OutlinedButton(onClick = { nav.navigate(MeasureRoute(current.id, r.id)) }) { Icon(Icons.Filled.Straighten, null); Spacer(Modifier.width(6.dp)); Text("Mesurer") }
                         OutlinedButton(onClick = { vm.readPlate(current) }) { Icon(Icons.Filled.DocumentScanner, null); Spacer(Modifier.width(6.dp)); Text("Lire la plaque") }
                         TextButton(onClick = { deletePhotoId = current.id }) { Text("Supprimer la photo", color = MaterialTheme.colorScheme.error) }
@@ -406,6 +408,18 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
 
             // --- Identification ---
             SectionCard("Identification", icon = Icons.Filled.AutoAwesome) {
+                // Outil principal : photo de face sélectionnée, sinon la première photo de face (ou la première photo).
+                val identifyPhoto = selectedPhoto?.let { s -> photos.firstOrNull { it.id == s.id } }?.takeIf { it.kind == PhotoKind.FRONT } ?: mainPhoto
+                if (identifyPhoto != null) {
+                    LargeActionButton("Identifier sur la photo", Icons.Filled.ViewColumn,
+                        onClick = { nav.navigate(PhotoIdentifyRoute(identifyPhoto.id, r.id)) })
+                    Text("Nombre d'éléments, dimensions avec une échelle (carte bancaire, feuille A4, dimension mesurée) et types compatibles " +
+                        "de la bibliothèque. La photo peut être prise un peu de biais ; chaque proposition est à vérifier.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    InfoBanner("Ajoutez une photo de face (un peu de biais convient) dans la section Photographies pour identifier le " +
+                        "radiateur : nombre d'éléments, dimensions et types compatibles.")
+                }
                 if (vm.classifierAvailable) {
                     InfoBanner("Un modèle d'IA embarqué est installé. Ses propositions s'accompagnent d'un indice de confiance et doivent être confirmées.")
                     val target = selectedPhoto ?: mainPhoto
@@ -414,7 +428,7 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
                     }
                 } else {
                     InfoBanner("Aucun modèle d'IA entraîné et validé n'est installé dans cette version : le type n'est pas reconnu automatiquement. " +
-                        "Identifiez le radiateur avec la bibliothèque illustrée ; le comptage des éléments et la lecture de plaque restent disponibles.",
+                        "Identifiez le radiateur sur la photo (analyse géométrique) ou avec la bibliothèque illustrée ; la lecture de plaque reste disponible.",
                         kind = BannerKind.WARNING)
                 }
                 Button(onClick = { nav.navigate(RadiatorLibraryRoute(r.id)) }) {
@@ -448,7 +462,8 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
 
             // --- Dimensions ---
             SectionCard("Dimensions", icon = Icons.Filled.Straighten,
-                subtitle = "Aucune dimension n'est déduite d'une photo sans objet de référence. Mesurez au mètre ou utilisez l'outil de mesure avec référence.") {
+                subtitle = "Aucune dimension n'est déduite d'une photo sans échelle. Mesurez au mètre, ou utilisez « Identifier sur la photo » avec " +
+                    "une carte bancaire, une feuille A4 ou une dimension mesurée.") {
                 // Côte à côte seulement s'il y a la place ; sinon empilés (petit écran, police agrandie).
                 FieldRow {
                     NumberField("Hauteur", r.heightMm, { v -> vm.update { it.copy(heightMm = v) } }, unit = "mm", decimals = 0, min = 50.0, max = 3000.0)
@@ -539,7 +554,7 @@ fun RadiatorEditScreen(nav: NavController, vm: RadiatorEditViewModel = hiltViewM
 
             // --- Validation obligatoire ---
             SectionCard("Validation", icon = Icons.Filled.CheckCircle) {
-                Text("Les caractéristiques proposées (bibliothèque, comptage, lecture de plaque, IA) doivent être vérifiées. " +
+                Text("Les caractéristiques proposées (bibliothèque, analyse de la photo, lecture de plaque, IA) doivent être vérifiées. " +
                     "Seuls les radiateurs validés entrent dans le bilan de chauffage.", style = MaterialTheme.typography.bodyMedium)
                 SwitchRow("Je confirme les caractéristiques de ce radiateur", r.validated, { on -> if (on) validate() else vm.setValidated(false) })
             }

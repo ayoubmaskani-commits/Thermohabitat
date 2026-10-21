@@ -106,9 +106,11 @@ fun RadiatorLibraryScreen(nav: NavController, vm: RadiatorLibraryViewModel = hil
                             RadiatorIllustration(cat, Modifier.size(140.dp, 90.dp))
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 cat.depthRangeMm?.let { Text("Profondeur usuelle ${it.first}–${it.last} mm", style = MaterialTheme.typography.bodySmall) }
-                                cat.sectionPitchMm?.let { Text("Pas d'élément ≈ $it mm", style = MaterialTheme.typography.bodySmall) }
                             }
                         }
+                        // Plages de pas et de hauteurs (comparaison avec une photo analysée) sur toute la largeur : textes longs.
+                        cat.pitchText?.let { Text(it, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium) }
+                        cat.heightText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                         Text(cat.description, style = MaterialTheme.typography.bodyMedium)
                         cat.visualCues.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
                         Text("À relever : " + cat.measureTips.joinToString(" "), style = MaterialTheme.typography.bodySmall,

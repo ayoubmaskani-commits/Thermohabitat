@@ -327,7 +327,7 @@ private fun CaptureSideAction(icon: ImageVector, label: String, primary: Boolean
 @Composable
 private fun CaptureGuideOverlay(kind: PhotoKind) {
     val tip = when (kind) {
-        PhotoKind.FRONT -> "Radiateur entier dans le cadre, bien de face"
+        PhotoKind.FRONT -> "Radiateur entier dans le cadre, de face ou un peu de biais"
         PhotoKind.SIDE -> "Vue de côté ou de dessus : montrez les colonnes"
         PhotoKind.NAMEPLATE -> "Plaque ou marquage en gros plan, sans reflet"
         else -> "Détail utile (robinet, raccord, marquage)"
@@ -361,8 +361,10 @@ fun CaptureGuideDialog(onDismiss: () -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(
-                    "1. Vue de face : placez-vous perpendiculairement au radiateur, à hauteur de son centre, radiateur entier dans le cadre.",
-                    "2. Pour mesurer sur la photo, posez une carte bancaire ou une feuille A4 contre le radiateur, dans le même plan.",
+                    "1. Vue de face : radiateur entier dans le cadre, de préférence à hauteur de son centre. Une photo un peu de biais " +
+                        "convient (meuble devant, recul limité) : l'analyse redresse la façade.",
+                    "2. Pour l'échelle, posez une carte bancaire ou une feuille A4 à plat contre la façade, ou notez une dimension " +
+                        "mesurée au mètre (hauteur ou longueur).",
                     "3. Vue de dessus ou de côté : elle permet de compter les colonnes et d'estimer la profondeur.",
                     "4. Plaque constructeur ou marquage : gros plan net, sans reflet ni flash direct.",
                     "5. Évitez le contre-jour ; un éclairage homogène améliore le comptage automatique des éléments.",

@@ -56,8 +56,8 @@ fun SettingsScreen(nav: NavController, vm: SettingsViewModel = hiltViewModel()) 
                 ValueRow("Modèle d'IA embarqué", if (vm.aiAvailable) "Installé" else "Non installé")
                 Text(
                     if (vm.aiAvailable) "Les propositions du modèle sont affichées avec leur indice de confiance et doivent être validées."
-                    else "Aucun modèle entraîné et validé n'est fourni : l'identification utilise la bibliothèque illustrée, le comptage assisté des éléments " +
-                        "(analyse de périodicité) et la lecture de plaque (OCR embarqué). Un modèle LiteRT/TensorFlow Lite peut être ajouté dans " +
+                    else "Aucun modèle entraîné et validé n'est fourni : l'identification utilise la bibliothèque illustrée, l'analyse géométrique des photos " +
+                        "(façade redressée, comptage des éléments, échelle, rapprochement avec la base) et la lecture de plaque (OCR embarqué). Un modèle LiteRT/TensorFlow Lite peut être ajouté dans " +
                         "assets/${TfLiteRadiatorClassifier.MODEL_ASSET} avec ses étiquettes (${TfLiteRadiatorClassifier.LABELS_ASSET}).",
                     style = MaterialTheme.typography.bodySmall,
                 )
