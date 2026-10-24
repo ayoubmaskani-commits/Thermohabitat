@@ -5,7 +5,6 @@ import android.graphics.Matrix
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,7 +20,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,13 +59,10 @@ import fr.thermohabitat.pro.ui.components.ScreenScaffold
 import fr.thermohabitat.pro.ui.components.ScrollColumn
 import fr.thermohabitat.pro.ui.components.SectionCard
 import fr.thermohabitat.pro.ui.components.ValueRow
-import fr.thermohabitat.pro.ui.navigation.ElementCountRoute
 import fr.thermohabitat.pro.ui.navigation.MeasureRoute
 import fr.thermohabitat.pro.ui.navigation.PhotoEditRoute
 import fr.thermohabitat.pro.ui.util.Fmt
 import fr.thermohabitat.thermal.model.ValueOrigin
-import fr.thermohabitat.thermal.vision.ElementCountResult
-import fr.thermohabitat.thermal.vision.ElementCounter
 import fr.thermohabitat.thermal.vision.ImagePoint
 import fr.thermohabitat.thermal.vision.MeasurementResult
 import fr.thermohabitat.thermal.vision.ReferenceMeasurement
@@ -175,128 +170,6 @@ fun PhotoEditScreen(nav: NavController, vm: PhotoEditViewModel = hiltViewModel()
             LargeActionButton(if (saving) "Enregistrement…" else "Enregistrer le recadrage", Icons.Filled.Check,
                 onClick = { if (!saving) vm.save(crop.rect) { nav.popBackStack() } })
             LargeActionButton("Pivoter de 90°", Icons.Filled.Rotate90DegreesCw, onClick = { if (!saving) vm.rotate() }, outlined = true)
-        }
-    }
-}
-
-// =====================================================================================
-// Comptage assisté des éléments
-// =====================================================================================
-
-@HiltViewModel
-class ElementCountViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
-    private val repository: ProjectRepository,
-    private val storage: PhotoStorage,
-) : ViewModel() {
-    private val route = savedStateHandle.toRoute<ElementCountRoute>()
-    val bitmap = MutableStateFlow<Bitmap?>(null)
-    val failed = MutableStateFlow(false)
-    val result = MutableStateFlow<ElementCountResult?>(null)
-    val analyzedRect = MutableStateFlow<androidx.compose.ui.geometry.Rect?>(null)
-    /** Analyse en cours : indicateur visible et bouton désactivé (pas de relance multiple). */
-    val analyzing = MutableStateFlow(false)
-
-    init {
-        viewModelScope.launch {
-            val bmp = repository.getPhoto(route.photoId)?.let { storage.loadBitmap(it.fileName, 1600) }
-            if (bmp == null) failed.value = true else bitmap.value = bmp
-        }
-    }
-
-    fun analyze(rect: androidx.compose.ui.geometry.Rect) = viewModelScope.launch {
-        val b = bitmap.value ?: return@launch
-        if (analyzing.value) return@launch
-        analyzing.value = true
-        try {
-            result.value = withContext(Dispatchers.Default) { ElementCounter.count(b.toGrayImage(rect)) }
-            analyzedRect.value = rect
-        } finally {
-            analyzing.value = false
-        }
-    }
-
-    /** Reporte le nombre proposé sur la fiche (qui repasse « à valider »). */
-    /** Évite un double report (double appui) qui fermerait aussi la fiche radiateur. */
-    private var applying = false
-
-    fun apply(count: Int, confidence: Double, onDone: () -> Unit) {
-        if (applying) return
-        applying = true
-        viewModelScope.launch {
-            val r = repository.getRadiator(route.radiatorId)
-            if (r == null) { applying = false; return@launch }
-            repository.updateRadiator(r.copy(sections = count, identificationConfidence = confidence, validated = false,
-                updatedAt = System.currentTimeMillis()))
-            onDone() // applying reste vrai : l'écran se ferme
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun ElementCountScreen(nav: NavController, vm: ElementCountViewModel = hiltViewModel()) {
-    val bitmap by vm.bitmap.collectAsStateWithLifecycle()
-    val failed by vm.failed.collectAsStateWithLifecycle()
-    val result by vm.result.collectAsStateWithLifecycle()
-    val analyzedRect by vm.analyzedRect.collectAsStateWithLifecycle()
-    val analyzing by vm.analyzing.collectAsStateWithLifecycle()
-    var manual by remember { mutableStateOf<Int?>(null) }
-    // Le résultat s'affiche sous l'image : il est amené à l'écran dès qu'il est prêt.
-    val resultBring = remember { BringIntoViewRequester() }
-    LaunchedEffect(result) { if (result != null) { withFrameNanos { }; resultBring.bringIntoView() } }
-    ScreenScaffold(title = "Nombre d'éléments", onBack = { nav.popBackStack() }) { padding ->
-        ScrollColumn(padding) {
-            val b = bitmap
-            if (b == null) { PhotoLoading(failed) { nav.popBackStack() }; return@ScrollColumn }
-            InfoBanner("Photo de face : encadrez seulement le corps du radiateur (sans pieds ni robinets), puis touchez « Analyser ». " +
-                "Vérifiez toujours le résultat.")
-            val crop = remember(b) { CropController(b.width, b.height, 0.15f) }
-            val accent = MaterialTheme.colorScheme.secondary
-            val lines = Color(0xFFFFC107)
-            ImageWorkArea(
-                b,
-                onDragStart = { p, minTolerance -> crop.start(p, maxOf(maxOf(b.width, b.height) * 0.07f, minTolerance)) },
-                onDrag = { _, d -> crop.drag(d) },
-            ) { frame ->
-                drawCrop(frame, crop.rect, accent)
-                val r = result; val ar = analyzedRect
-                if (r != null && ar != null) {
-                    r.boundariesPx.forEach { x ->
-                        val top = frame.toScreen(Offset(ar.left + x.toFloat(), ar.top))
-                        val bottom = frame.toScreen(Offset(ar.left + x.toFloat(), ar.bottom))
-                        drawLine(lines, top, bottom, strokeWidth = 2.dp.toPx())
-                    }
-                }
-            }
-            Button(enabled = !analyzing, onClick = { vm.analyze(crop.rect) }, modifier = Modifier.fillMaxWidth()) {
-                if (analyzing) {
-                    CircularProgressIndicator(Modifier.size(18.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(if (result == null) "Analyser la zone encadrée" else "Relancer l'analyse")
-            }
-            result?.let { r ->
-                SectionCard("Résultat de l'analyse", Modifier.bringIntoViewRequester(resultBring)) {
-                    ValueRow("Éléments proposés", r.count?.toString() ?: "Non déterminé", emphasize = true)
-                    ValueRow("Indice de confiance", Fmt.pct(r.confidence))
-                    r.periodPx?.let { ValueRow("Largeur d'un élément (photo)", "${Fmt.num(it, 1)} px") }
-                    InfoBanner(r.message, kind = if (r.reliable) BannerKind.INFO else BannerKind.WARNING)
-                    Text("Les traits jaunes montrent les limites d'éléments détectées : elles doivent coïncider avec les joints du radiateur.",
-                        style = MaterialTheme.typography.bodySmall)
-                    NumberField("Nombre retenu", (manual ?: r.count)?.toDouble(), { manual = it?.toInt() },
-                        supportingText = "Corrigez si le comptage est faux", decimals = 0, min = 1.0, max = 200.0)
-                    val retained = manual ?: r.count
-                    // Le report remet la fiche « à valider » (hors étude) : l'utilisateur en est averti avant d'appuyer.
-                    Text("La fiche repassera « à valider » : confirmez-la ensuite pour l'inclure dans l'étude.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    // Boutons empilés pleine largeur (la carte est une colonne) : « Annuler » n'est plus écrasé.
-                    Button(enabled = retained != null, modifier = Modifier.fillMaxWidth(), onClick = {
-                        vm.apply(retained!!, if (manual != null && manual != r.count) 1.0 else r.confidence) { nav.popBackStack() }
-                    }) { Text("Reporter sur la fiche") }
-                    TextButton(onClick = { nav.popBackStack() }, modifier = Modifier.fillMaxWidth()) { Text("Annuler") }
-                }
-            }
         }
     }
 }
